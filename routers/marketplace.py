@@ -2225,8 +2225,11 @@ def _featured_dict(row, studs: bool) -> dict:
 # OUTER APPLY (not LEFT JOIN) for photos and business: a PeopleID can hold
 # several active BusinessAccess rows, which would otherwise fan one animal out
 # into duplicate rows and shift the "most recent" pick.
+#
+# TOP 12 is a lookahead, not a page: only the first row with a usable photo is
+# kept, so this just needs enough headroom to skip recent photo-less records.
 _FEATURED_SQL = """
-    SELECT TOP 24
+    SELECT TOP 12
         a.AnimalID, a.FullName, a.SpeciesID, a.Category, a.LastUpdated,
         a.Description, a.StudDescription,
         ph.ListPageImage, ph.Photo1, ph.Photo2, ph.Photo3, ph.Photo4,
@@ -2260,8 +2263,7 @@ _FEATURED_SQL = """
 
 @marketplace_router.get("/homepage-featured")
 def livestock_homepage_featured(db: Session = Depends(get_db)):
-    """Homepage feature cards: newest for-sale animal, newest stud, plus a
-    small heritage row of the next-newest for-sale listings.
+    """Homepage feature cards: the newest for-sale animal and the newest stud.
 
     Candidates come back newest-first; we take the newest one that actually has
     a photo so the feature card never renders as an empty frame, and fall back
@@ -2284,30 +2286,10 @@ def livestock_homepage_featured(db: Session = Depends(get_db)):
             return None
         return next((p for p in picks if p["photo"]), picks[0])
 
-    for_sale_picks = candidates(False, "a.PublishForSale = 1")
-    stud_picks     = candidates(True,  "a.PublishStud = 1")
-    for_sale = lead_of(for_sale_picks)
-    stud     = lead_of(stud_picks)
+    for_sale = lead_of(candidates(False, "a.PublishForSale = 1"))
+    stud     = lead_of(candidates(True,  "a.PublishStud = 1"))
 
-    # Heritage row: next-newest for-sale listings behind the two lead cards.
-    # Spread across sellers first so one large ranch can't fill the whole row,
-    # then top up from whatever is left.
-    used_ids = {p["animal_id"] for p in (for_sale, stud) if p}
-    rest = [p for p in for_sale_picks if p["animal_id"] not in used_ids and p["photo"]]
-    heritage: list = []
-    seen_sellers = {p["seller"] for p in (for_sale, stud) if p and p["seller"]}
-    for unique_seller_pass in (True, False):
-        for p in rest:
-            if len(heritage) >= 3:
-                break
-            if p["animal_id"] in {h["animal_id"] for h in heritage}:
-                continue
-            if unique_seller_pass and p["seller"] in seen_sellers:
-                continue
-            seen_sellers.add(p["seller"])
-            heritage.append(p)
-
-    result = {"for_sale": for_sale, "stud": stud, "heritage": heritage}
+    result = {"for_sale": for_sale, "stud": stud}
     _livestock_cache["homepage_featured"] = {"data": result, "ts": _time.time()}
     return result
 
