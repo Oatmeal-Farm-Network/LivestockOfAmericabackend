@@ -19,8 +19,8 @@ router = APIRouter()
 
 SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
 FROM_EMAIL       = os.getenv("FROM_EMAIL", "john@oatmeal-ai.com")
-SITE_NAME        = os.getenv("SITE_NAME", "Oatmeal Farm Network")
-FRONTEND_URL     = os.getenv("FRONTEND_URL", "https://www.OatmealFarmNetwork.com")
+SITE_NAME        = os.getenv("SITE_NAME", "Livestock Of America")
+FRONTEND_URL     = os.getenv("FRONTEND_URL", "https://livestockofamerica.com")
 
 
 class ForgotPasswordRequest(BaseModel):
