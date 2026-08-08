@@ -1,19 +1,31 @@
+# Livestock of America backend — builds the LOA-only copy of the Oatmeal Farm
+# Network backend and pushes it to its own Artifact Registry path, so it can be
+# deployed and rolled back independently of the shared OFN backend.
 steps:
   # Build Docker image
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'build'
       - '-t'
-      - 'us-central1-docker.pkg.dev/animated-flare-421518/cloud-run-source-deploy/oatmealfarmnetworkbackend/oatmealfarmnewtorkbackend:latest'
+      - '${_IMAGE}'
       - '.'
 
   # Push image to Artifact Registry
   - name: 'gcr.io/cloud-builders/docker'
     args:
       - 'push'
-      - 'us-central1-docker.pkg.dev/animated-flare-421518/cloud-run-source-deploy/oatmealfarmnetworkbackend/oatmealfarmnewtorkbackend:latest'
+      - '${_IMAGE}'
 
-  # Deploy step removed — deploy manually via Cloud Run console or gcloud CLI
+  # Deploy step intentionally omitted — deploy via Cloud Run console or:
+  #   gcloud run deploy livestock-backend-prod --image ${_IMAGE} \
+  #     --region us-central1 --project animated-flare-421518
+
+substitutions:
+  _IMAGE: 'us-central1-docker.pkg.dev/animated-flare-421518/oatmeal-farm-registry/livestock-backend:latest'
 
 images:
-  - 'us-central1-docker.pkg.dev/animated-flare-421518/cloud-run-source-deploy/oatmealfarmnetworkbackend/oatmealfarmnewtorkbackend:latest'
+  - '${_IMAGE}'
+
+options:
+  machineType: 'E2_HIGHCPU_8'
+timeout: '1800s'
