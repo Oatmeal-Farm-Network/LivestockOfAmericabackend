@@ -2,12 +2,13 @@ from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from database import get_db
-import time, re
+import os, time, re
 from routers.translation import translate_fields, translate_list
 
 router = APIRouter(prefix="/api/livestock", tags=["livestock"])
 
-GCS_IMAGES_URL = "https://storage.googleapis.com/oatmeal-farm-network-images/Animals"
+GCS_BUCKET = os.getenv("GCS_IMAGES_BUCKET", "oatmeal-farm-network-images")
+GCS_IMAGES_URL = f"https://storage.googleapis.com/{GCS_BUCKET}/Animals"
 
 OLD_DOMAINS = [
     'oatmealfarmnetwork.com', 'livestockofamerica.com',
@@ -15,12 +16,23 @@ OLD_DOMAINS = [
     'globallivestocksolutions.com',
 ]
 
+
 def _fix_image_url(url: str | None) -> str | None:
+    """Resolve a stored image reference to a public URL.
+
+    SpeciesBreedLookupTable.BreedImage is normalised to a full GCS URL (see
+    sql/normalize_breed_images.sql), so the common path is now a pass-through.
+    The legacy branches below still handle /uploads/ paths and old-domain URLs
+    for any column that has not been migrated.
+    """
     if not url:
         return None
     url = url.strip()
     if len(url) < 4:
         return None
+    # Already canonical — nothing to rewrite.
+    if url.lower().startswith("https://storage.googleapis.com/"):
+        return url
     if url.lower().startswith('http'):
         url = re.sub(r'^http:', 'https:', url, flags=re.IGNORECASE)
         for domain in OLD_DOMAINS:
