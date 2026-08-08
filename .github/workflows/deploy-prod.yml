@@ -1,0 +1,92 @@
+name: Deploy LOA Backend Production
+
+# main → livestock-backend-prod (Cloud Run, us-central1)
+#
+# No GitHub secrets required. Auth is keyless via Workload Identity Federation:
+# the values below are resource identifiers, not credentials. The security
+# boundary is the IAM binding on the deployer service account, which only
+# trusts tokens carrying attribute.repository == this repo.
+#
+# Any value can still be overridden by setting a repository variable of the
+# same name without editing this file.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  PROJECT_ID: ${{ vars.PROD_GCP_PROJECT_ID || 'animated-flare-421518' }}
+  REGION: ${{ vars.PROD_REGION || 'us-central1' }}
+  GAR_REPOSITORY: ${{ vars.PROD_ARTIFACT_REGISTRY_REPOSITORY || 'oatmeal-farm-registry' }}
+  SERVICE_NAME: livestock-backend-prod
+  IMAGE_NAME: livestock-backend
+  RUNTIME_SERVICE_ACCOUNT: ${{ vars.PROD_RUNTIME_SA || '802455386518-compute@developer.gserviceaccount.com' }}
+  CLOUDSQL_INSTANCE: ${{ vars.PROD_CLOUDSQL_INSTANCE || 'animated-flare-421518:us-central1:oatmealailive' }}
+  WIF_PROVIDER: ${{ vars.PROD_GCP_WORKLOAD_IDENTITY_PROVIDER || 'projects/802455386518/locations/global/workloadIdentityPools/github-pool/providers/github-provider' }}
+  DEPLOYER_SA: ${{ vars.PROD_GCP_SERVICE_ACCOUNT || 'github-deployer@animated-flare-421518.iam.gserviceaccount.com' }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Derive commit SHA tag
+        shell: bash
+        run: echo "COMMIT_SHA=${GITHUB_SHA::12}" >> "$GITHUB_ENV"
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER_SA }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Build Docker image
+        run: |
+          docker build \
+            -t "${REGION}-docker.pkg.dev/${PROJECT_ID}/${GAR_REPOSITORY}/${IMAGE_NAME}:${COMMIT_SHA}" \
+            -t "${REGION}-docker.pkg.dev/${PROJECT_ID}/${GAR_REPOSITORY}/${IMAGE_NAME}:latest" \
+            .
+
+      - name: Push Docker image
+        run: |
+          docker push "${REGION}-docker.pkg.dev/${PROJECT_ID}/${GAR_REPOSITORY}/${IMAGE_NAME}:${COMMIT_SHA}"
+          docker push "${REGION}-docker.pkg.dev/${PROJECT_ID}/${GAR_REPOSITORY}/${IMAGE_NAME}:latest"
+
+      # Env vars (DB creds, SECRET_KEY, SCHEDULER_SECRET) are intentionally not
+      # set here — they already live on the service and are preserved across
+      # revisions. Change them in the Cloud Run console, not in this file.
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy "${SERVICE_NAME}" \
+            --image "${REGION}-docker.pkg.dev/${PROJECT_ID}/${GAR_REPOSITORY}/${IMAGE_NAME}:${COMMIT_SHA}" \
+            --region "${REGION}" \
+            --project "${PROJECT_ID}" \
+            --platform managed \
+            --allow-unauthenticated \
+            --memory 512Mi \
+            --cpu 1 \
+            --max-instances 20 \
+            --timeout 300 \
+            --add-cloudsql-instances "${CLOUDSQL_INSTANCE}" \
+            --service-account "${RUNTIME_SERVICE_ACCOUNT}" \
+            --quiet
+
+      - name: Show deployed URL
+        run: |
+          gcloud run services describe "${SERVICE_NAME}" \
+            --region "${REGION}" \
+            --project "${PROJECT_ID}" \
+            --format='value(status.url)'
