@@ -47,7 +47,8 @@ def get_site_settings(db: Session = Depends(get_db)):
         return {"team_only_login": False, "signup_open": True}
     return {
         "team_only_login": bool(settings.team_only_login),
-        "signup_open": bool(settings.signup_open),
+        # Always open on LOA — see the note in signup() about the shared row.
+        "signup_open": True,
     }
 
 
@@ -58,10 +59,12 @@ def get_site_settings(db: Session = Depends(get_db)):
 def signup(request: SignupRequest, db: Session = Depends(get_db)):
     from datetime import datetime
 
-    # Check if signup is currently open
-    settings = db.query(models.SiteSettings).filter(models.SiteSettings.id == 1).first()
-    if settings and not settings.signup_open:
-        raise HTTPException(status_code=403, detail="Registration is currently closed.")
+    # Registration is always open on Livestock of America.
+    #
+    # The SiteSettings.signup_open flag is deliberately not consulted here: that
+    # row lives in the database shared with Oatmeal Farm Network, which gates its
+    # own signup on the same value. Flipping it to open LOA would also open OFN.
+    # LOA accepts sign-ups directly, so the gate is simply not applied.
 
     email = request.Email.strip().lower()
 
