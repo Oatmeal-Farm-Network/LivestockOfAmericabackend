@@ -97,6 +97,34 @@ with engine.begin() as _conn:
         END
     """))
 
+# ── Auto-create LivestockSavedItems table ────────────────────────────────────
+# "My Animals" bookmarks: the animals, studs, and ranches a person has saved.
+# An animal or stud row carries AnimalID; a ranch row carries BusinessID — the
+# same ids /for-sale/{slug}, /studs/{slug} and /ranches/list/{slug} hand out.
+with engine.begin() as _conn:
+    _conn.execute(text("""
+        IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME='LivestockSavedItems')
+        BEGIN
+            CREATE TABLE LivestockSavedItems (
+                SavedID     INT IDENTITY(1,1) PRIMARY KEY,
+                PeopleID    INT NOT NULL,
+                ItemType    VARCHAR(20) NOT NULL,   -- 'animal' | 'stud' | 'ranch'
+                AnimalID    INT NULL,               -- set for 'animal' / 'stud'
+                BusinessID  INT NULL,               -- set for 'ranch'
+                CreatedAt   DATETIME NOT NULL DEFAULT GETDATE()
+            )
+            -- Filtered, because SQL Server treats NULLs as equal in a unique
+            -- index: an unfiltered constraint would let a person save only one
+            -- ranch (every ranch row shares AnimalID = NULL), and vice versa.
+            CREATE UNIQUE INDEX UQ_LivestockSaved_Animal
+                ON LivestockSavedItems (PeopleID, ItemType, AnimalID)
+                WHERE AnimalID IS NOT NULL
+            CREATE UNIQUE INDEX UQ_LivestockSaved_Ranch
+                ON LivestockSavedItems (PeopleID, ItemType, BusinessID)
+                WHERE BusinessID IS NOT NULL
+        END
+    """))
+
 # ── Auto-create RestaurantStandingOrders table ───────────────────────────────
 # Recurring orders. ListingType + ListingSourceID identify a row in Produce/MeatInventory/ProcessedFood/SFProducts.
 with engine.begin() as _conn:
@@ -2977,6 +3005,207 @@ def remove_saved_farm(buyer_business_id: int, farm_business_id: int, db: Session
     """), {"b": buyer_business_id, "f": farm_business_id})
     db.commit()
     return {"message": "Farm removed."}
+
+
+# ─────────────────────────────────────────────
+# LIVESTOCK — SAVED ITEMS  ("My Animals" bookmarks)
+# ─────────────────────────────────────────────
+# The animals, studs, and ranches a signed-in person has bookmarked from the
+# livestock marketplace. PeopleID always comes from the bearer token and never
+# from the query string, so one user cannot read or delete another's bookmarks
+# by guessing an id.
+
+SAVED_ANIMAL_TYPES = ("animal", "stud")
+SAVED_ITEM_TYPES   = ("animal", "stud", "ranch")
+
+# Which column holds the id, per item type. Also the whitelist that keeps the
+# column name in the DELETE below out of caller control.
+SAVED_ID_COLUMN = {"animal": "AnimalID", "stud": "AnimalID", "ranch": "BusinessID"}
+
+
+class SavedItemAdd(BaseModel):
+    item_type:   str
+    animal_id:   Optional[int] = None
+    business_id: Optional[int] = None
+
+
+def _saved_item_key(item_type, animal_id, business_id):
+    """Validate one incoming bookmark; return (ItemType, AnimalID, BusinessID).
+
+    Exactly one of the two id columns is set, matching the filtered unique
+    indexes on the table. Shared by POST and DELETE so both agree on what a
+    valid bookmark looks like.
+    """
+    t = (item_type or "").strip().lower()
+    if t not in SAVED_ITEM_TYPES:
+        raise HTTPException(400, f"item_type must be one of: {', '.join(SAVED_ITEM_TYPES)}.")
+    is_ranch = t == "ranch"
+    raw = business_id if is_ranch else animal_id
+    if raw is None:
+        raise HTTPException(400, f"{'business_id' if is_ranch else 'animal_id'} is required "
+                                 f"when item_type is '{t}'.")
+    try:
+        rid = int(raw)
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Saved item id must be an integer.")
+    return (t, None, rid) if is_ranch else (t, rid, None)
+
+
+def _load_saved_animals(db: Session, animal_ids):
+    """Batch-load the Animals rows behind a set of saved animal/stud ids.
+
+    Selects the same columns and joins _livestock_listing uses, so _animal_dict
+    renders a saved card identically to the listing card it was saved from.
+    One query for the whole page rather than one per bookmark. An animal that
+    was deleted simply does not come back — the caller renders that as "no
+    longer available" rather than dropping the row, so the user can still
+    un-save it.
+    """
+    if not animal_ids:
+        return {}
+    rows = db.execute(text("""
+        SELECT a.AnimalID, a.FullName, a.SpeciesID,
+               ph.Photo1, ph.Photo2, ph.ListPageImage,
+               p.Price, p.StudFee,
+               b1.Breed AS Breed1, b2.Breed AS Breed2,
+               biz.BusinessID, biz.BusinessName, addr.AddressState
+        FROM Animals a
+        OUTER APPLY (SELECT TOP 1 * FROM Pricing x WHERE x.AnimalID = a.AnimalID) p
+        OUTER APPLY (SELECT TOP 1 * FROM Photos  x WHERE x.AnimalID = a.AnimalID) ph
+        LEFT JOIN SpeciesBreedLookupTable b1 ON b1.BreedLookupID = a.BreedID
+        LEFT JOIN SpeciesBreedLookupTable b2 ON b2.BreedLookupID = a.BreedID2
+        OUTER APPLY (
+            SELECT TOP 1 b.BusinessID, b.BusinessName, b.AddressID
+            FROM Business b
+            WHERE b.BusinessID = COALESCE(a.BusinessID, (
+                SELECT TOP 1 ba.BusinessID FROM BusinessAccess ba
+                WHERE ba.PeopleID = a.PeopleID AND ba.Active = 1
+                ORDER BY ba.BusinessID
+            ))
+        ) biz
+        LEFT JOIN Address addr ON addr.AddressID = biz.AddressID
+        WHERE a.AnimalID IN :ids
+    """).bindparams(bindparam("ids", expanding=True)),
+        {"ids": list(animal_ids)}).fetchall()
+    return {r.AnimalID: r for r in rows}
+
+
+def _load_saved_ranches(db: Session, business_ids):
+    """Batch-load the Business rows behind a set of saved ranch ids."""
+    if not business_ids:
+        return {}
+    rows = db.execute(text("""
+        SELECT b.BusinessID, b.BusinessName, b.BusinessLogo,
+               a.AddressCity, a.AddressState, a.AddressCountry
+        FROM Business b
+        LEFT JOIN Address a ON b.AddressID = a.AddressID
+        WHERE b.BusinessID IN :ids
+    """).bindparams(bindparam("ids", expanding=True)),
+        {"ids": list(business_ids)}).fetchall()
+    return {r.BusinessID: r for r in rows}
+
+
+def _saved_ranch_dict(row) -> dict:
+    """Ranch card fields, matching the shape /api/ranches/list/{slug} returns.
+
+    Reuses the ranches router's logo normaliser: raw BusinessLogo values are
+    legacy paths on retired domains that do not resolve as-is.
+    """
+    from routers.ranches import _fix_logo, _safe_str
+    return {
+        "business_id":   row.BusinessID,
+        "business_name": _safe_str(getattr(row, "BusinessName", "")),
+        "logo":          _fix_logo(getattr(row, "BusinessLogo", None)),
+        "city":          _safe_str(getattr(row, "AddressCity", "")),
+        "state":         _safe_str(getattr(row, "AddressState", "")),
+        "country":       _safe_str(getattr(row, "AddressCountry", "")),
+    }
+
+
+@marketplace_router.get("/saved")
+def list_saved_items(db: Session = Depends(get_db), current_user = Depends(get_current_user)):
+    """Everything the signed-in person has saved, fully hydrated.
+
+    This single response serves both consumers: the Saved tab renders `items`,
+    and every SaveButton reads its checked state off the `animals` / `studs` /
+    `ranches` id lists in the same payload, fetched once and shared through the
+    SavedItems context. The cost is bounded by how many things the user saved,
+    not by how many listings are on screen, so there is no separate ids-only
+    endpoint to keep in sync.
+    """
+    rows = db.execute(text("""
+        SELECT SavedID, ItemType, AnimalID, BusinessID, CreatedAt
+        FROM LivestockSavedItems
+        WHERE PeopleID = :pid
+        ORDER BY CreatedAt DESC
+    """), {"pid": current_user.PeopleID}).fetchall()
+
+    animals = _load_saved_animals(
+        db, {r.AnimalID for r in rows if r.ItemType in SAVED_ANIMAL_TYPES and r.AnimalID is not None})
+    ranches = _load_saved_ranches(
+        db, {r.BusinessID for r in rows if r.ItemType == "ranch" and r.BusinessID is not None})
+
+    items = []
+    for r in rows:
+        item = {
+            "saved_id":   r.SavedID,
+            "item_type":  r.ItemType,
+            "created_at": r.CreatedAt.isoformat() if r.CreatedAt else None,
+        }
+        if r.ItemType == "ranch":
+            ranch = ranches.get(r.BusinessID)
+            item["business_id"] = r.BusinessID
+            item["ranch"] = _saved_ranch_dict(ranch) if ranch is not None else None
+        else:
+            animal = animals.get(r.AnimalID)
+            item["animal_id"] = r.AnimalID
+            item["animal"] = _animal_dict(animal, r.ItemType == "stud") if animal is not None else None
+        items.append(item)
+
+    return {
+        "items":   items,
+        "animals": [r.AnimalID   for r in rows if r.ItemType == "animal" and r.AnimalID is not None],
+        "studs":   [r.AnimalID   for r in rows if r.ItemType == "stud"   and r.AnimalID is not None],
+        "ranches": [r.BusinessID for r in rows if r.ItemType == "ranch"  and r.BusinessID is not None],
+    }
+
+
+@marketplace_router.post("/saved")
+def add_saved_item(data: SavedItemAdd, db: Session = Depends(get_db),
+                   current_user = Depends(get_current_user)):
+    item_type, animal_id, business_id = _saved_item_key(
+        data.item_type, data.animal_id, data.business_id)
+    try:
+        db.execute(text("""
+            INSERT INTO LivestockSavedItems (PeopleID, ItemType, AnimalID, BusinessID)
+            VALUES (:pid, :t, :aid, :bid)
+        """), {"pid": current_user.PeopleID, "t": item_type,
+               "aid": animal_id, "bid": business_id})
+        db.commit()
+        return {"message": "Item saved.", "item_type": item_type,
+                "animal_id": animal_id, "business_id": business_id}
+    except Exception:
+        db.rollback()
+        # Likely cause: filtered-unique-index violation = already saved. Saving
+        # the same thing twice is what a double-click looks like, so report success.
+        return {"message": "Item was already saved.", "item_type": item_type,
+                "animal_id": animal_id, "business_id": business_id}
+
+
+@marketplace_router.delete("/saved")
+def remove_saved_item(item_type: str, animal_id: Optional[int] = None,
+                      business_id: Optional[int] = None, db: Session = Depends(get_db),
+                      current_user = Depends(get_current_user)):
+    t, a_id, b_id = _saved_item_key(item_type, animal_id, business_id)
+    # Column comes from SAVED_ID_COLUMN, keyed by an already-validated item
+    # type, so it is never caller-controlled text. The id stays a bind param.
+    col = SAVED_ID_COLUMN[t]
+    db.execute(text(f"""
+        DELETE FROM LivestockSavedItems
+        WHERE PeopleID = :pid AND ItemType = :t AND {col} = :iid
+    """), {"pid": current_user.PeopleID, "t": t, "iid": b_id if t == "ranch" else a_id})
+    db.commit()
+    return {"message": "Item removed."}
 
 
 # ─────────────────────────────────────────────
