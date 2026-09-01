@@ -331,6 +331,47 @@ def delete_custom_category(cat_id: int, business_id: int, db: Session = Depends(
 
 # ── Public post endpoints ────────────────────────────────────────
 
+# country.country_id for the countries Livestock of America covers.
+NORTH_AMERICA_COUNTRY_IDS = (1228, 1039, 1140, 1086)  # USA, Canada, Mexico, Greenland
+
+# Whether a post's business sits in North America. Three signals are checked
+# because no single one is reliable across the legacy data:
+#
+#   Address.country_id      cleanest and best populated, but blank on ~40 rows
+#   Address.AddressCountry  free text: 'USA', 'CANADA', 'CAN', 'United States
+#                           (USA)', and 45 rows holding a bare id like '1039'.
+#                           Matched against an explicit list rather than a
+#                           LIKE, so 'United Kingdom' cannot slip through.
+#   Address.StateIndex      resolved through state_province; this is what
+#                           rescues the Oregon businesses that carry a state
+#                           but no country at all.
+#
+# EXISTS rather than a join: a join on state_province would risk duplicating
+# post rows, and this only ever needs a yes/no answer.
+_NORTH_AMERICA_SQL = """
+EXISTS (
+    SELECT 1 FROM Address na_a
+    WHERE na_a.AddressID = biz.AddressID
+      AND (
+            TRY_CAST(na_a.country_id AS INT) IN (1228, 1039, 1140, 1086)
+         OR TRY_CAST(na_a.AddressCountry AS INT) IN (1228, 1039, 1140, 1086)
+         OR UPPER(LTRIM(RTRIM(na_a.AddressCountry))) IN (
+                'USA','US','U.S.','U.S.A.','UNITED STATES','UNITED STATES OF AMERICA',
+                'UNITED STATES (USA)','AMERICA',
+                'CANADA','CAN','CA',
+                'MEXICO','MEX','MX',
+                'GREENLAND','GRL','GL','KALAALLIT NUNAAT'
+            )
+         OR EXISTS (
+                SELECT 1 FROM state_province na_sp
+                WHERE na_sp.StateIndex = na_a.StateIndex
+                  AND TRY_CAST(na_sp.country_id AS INT) IN (1228, 1039, 1140, 1086)
+            )
+      )
+)
+"""
+
+
 @router.get("/posts")
 def list_public_posts(
     business_id: Optional[int] = None,
@@ -338,6 +379,7 @@ def list_public_posts(
     category_name: Optional[str] = None,
     featured_only: bool = False,
     show_on_website: bool = False,
+    north_america: bool = False,
     limit: int = 20,
     offset: int = 0,
     lang: str = "en",
@@ -346,7 +388,12 @@ def list_public_posts(
     """List posts, optionally filtered by business, category, or featured.
     By default filters to IsPublished=1 (public directory/listing).
     Pass show_on_website=true to instead filter by ShowOnWebsite=1 (the
-    per-business custom website toggle used by WebsiteBuilder)."""
+    per-business custom website toggle used by WebsiteBuilder).
+
+    Pass north_america=true to keep only posts whose business is in the USA,
+    Canada, Mexico or Greenland. Opt-in rather than always-on so a business
+    viewing its own blog still sees its posts wherever it is based. A business
+    with no resolvable country is treated as outside the region and excluded."""
     _ensure_schema(db)
     where = ["b.ShowOnWebsite = 1"] if show_on_website else ["b.IsPublished = 1"]
     params: dict = {"limit": limit, "offset": offset}
@@ -362,6 +409,8 @@ def list_public_posts(
         params["cname"] = category_name
     if featured_only:
         where.append("b.IsFeatured = 1")
+    if north_america:
+        where.append(_NORTH_AMERICA_SQL)
 
     where_sql = " AND ".join(where)
     rows = db.execute(text(f"""
