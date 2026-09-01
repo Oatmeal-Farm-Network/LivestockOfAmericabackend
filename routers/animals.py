@@ -16,6 +16,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from database import get_db
 from auth import get_current_user
+from routers.subscription_limits import (
+    assert_can_publish, business_id_for_animal,
+)
 
 _GCS_BUCKET  = "oatmeal-farm-network-images"
 _GCS_PREFIX  = f"https://storage.googleapis.com/{_GCS_BUCKET}/"
@@ -306,6 +309,8 @@ async def update_pricing(animal_id: int, request: Request,
     free     = 1 if form.get("Free")    in ("1", "Yes", "True") else 0
 
     # ForSale lives on Animals.PublishForSale, not in the Pricing table
+    if for_sale:
+        assert_can_publish(db, business_id_for_animal(db, animal_id), "for_sale", animal_id)
     db.execute(text("UPDATE Animals SET PublishForSale = :v, LastUpdated = SYSUTCDATETIME() WHERE AnimalID = :aid"),
                {"v": for_sale, "aid": animal_id})
 
@@ -784,6 +789,8 @@ async def toggle_publish(animal_id: int, request: Request,
                           current_user=Depends(get_current_user)):
     body = await request.json()
     val = 1 if body.get("publish") else 0
+    if val:
+        assert_can_publish(db, business_id_for_animal(db, animal_id), "for_sale", animal_id)
     db.execute(text("UPDATE Animals SET PublishForSale = :v, LastUpdated = SYSUTCDATETIME() WHERE AnimalID = :aid"),
                {"v": val, "aid": animal_id})
     db.commit()
@@ -798,6 +805,8 @@ async def toggle_publish_stud(animal_id: int, request: Request,
                                current_user=Depends(get_current_user)):
     body = await request.json()
     val = 1 if body.get("publish") else 0
+    if val:
+        assert_can_publish(db, business_id_for_animal(db, animal_id), "stud", animal_id)
     db.execute(text("UPDATE Animals SET PublishStud = :v, LastUpdated = SYSUTCDATETIME() WHERE AnimalID = :aid"),
                {"v": val, "aid": animal_id})
     db.commit()

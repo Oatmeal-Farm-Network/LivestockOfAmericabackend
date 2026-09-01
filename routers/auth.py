@@ -610,6 +610,12 @@ async def add_animal(
         ), {"bid": business_id}).fetchone()
         people_id = ba_row.PeopleID if ba_row else None
 
+        # Creating an animal already marked for sale counts against the plan's
+        # allowance, same as toggling an existing animal on later.
+        if form.get("ForSale") == "Yes":
+            from routers.subscription_limits import assert_can_publish
+            assert_can_publish(db, business_id, "for_sale")
+
         db.execute(text("""
             INSERT INTO Animals (
                 BusinessID, PeopleID, FullName, SpeciesID, NumberofAnimals, SpeciesCategoryID,
@@ -857,6 +863,11 @@ async def add_animal(
 
         db.commit()
         return {"message": "Animal added successfully", "AnimalID": animal_id}
+    except HTTPException:
+        # Deliberate responses (e.g. the 402 plan-limit refusal above) must keep
+        # their status code instead of being reported as an unexpected failure.
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
         import traceback; traceback.print_exc()

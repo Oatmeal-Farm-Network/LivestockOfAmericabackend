@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from database import get_db, SessionLocal
+from routers.subscription_limits import DIRECTORY_VISIBLE_SQL
 import models
 import datetime
 
@@ -277,7 +278,8 @@ def search_businesses(q: str = "", limit: int = 1000, db: Session = Depends(get_
 
     params = {"pattern": f"%{escaped}%", "limit": max(1, min(int(limit or 1000), 2000))}
     named = ("b.BusinessName IS NOT NULL AND LTRIM(RTRIM(b.BusinessName)) <> ''")
-    where = f"b.BusinessName LIKE :pattern ESCAPE '\\' AND {named}"
+    where = (f"b.BusinessName LIKE :pattern ESCAPE '\\' AND {named} "
+             f"AND {DIRECTORY_VISIBLE_SQL}")
 
     try:
         total = db.execute(text(
@@ -334,7 +336,7 @@ def get_businesses(
         from sqlalchemy import text
 
         params = {}
-        conditions = ["1=1"]
+        conditions = ["1=1", DIRECTORY_VISIBLE_SQL]
 
         if BusinessTypeID:
             conditions.append("b.BusinessTypeID = :business_type_id")

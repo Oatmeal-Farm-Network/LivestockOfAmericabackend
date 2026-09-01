@@ -80,8 +80,12 @@ def get_settings(people_id: str = Depends(get_current_user), db: Session = Depen
     if not row:
         raise HTTPException(500, "Settings row missing")
     is_admin = _is_admin(people_id)
+    # Through get_stripe_config so an environment-supplied key wins, matching
+    # what checkout actually bills with. Reading the row directly here would hand
+    # the browser a live key while the server was transacting in test mode.
+    cfg = get_stripe_config(db)
     return {
-        "StripePublishableKey": row["StripePublishableKey"],
+        "StripePublishableKey": cfg.get("StripePublishableKey"),
         "StripeSecretKeyMasked": _mask(row["StripeSecretKey"]),
         "StripeWebhookSecretMasked": _mask(row["StripeWebhookSecret"]),
         "StripeTestMode": bool(row["StripeTestMode"]),
@@ -151,13 +155,37 @@ def put_settings(
 
 
 def get_stripe_config(db: Session) -> dict:
-    """Helper used by stripe_payments router to load live config from DB."""
+    """Stripe config for this deployment: the OFNPlatformSettings row, with
+    environment variables taking precedence.
+
+    The settings row is shared with Oatmeal Farm Network, so keeping the secret
+    in the environment lets Livestock of America bill through its own Stripe
+    account without putting that credential in a table another site reads -- and
+    keeps it out of database backups. Set STRIPE_SECRET_KEY (and optionally
+    STRIPE_PUBLISHABLE_KEY / STRIPE_WEBHOOK_SECRET) to use it; leave them unset
+    to fall back to whatever the admin saved in Accounting -> Payments.
+    """
     row = db.execute(text("""
         SELECT TOP 1 StripeSecretKey, StripeWebhookSecret, StripePublishableKey,
                      StripeTestMode, RefundModel, RefundDeadlineDays,
                      PlatformFeePercent, CurrencyCode
         FROM OFNPlatformSettings ORDER BY SettingID
     """)).mappings().first()
-    if not row:
-        return {}
-    return dict(row)
+    cfg = dict(row) if row else {}
+
+    env_secret = (os.getenv("STRIPE_SECRET_KEY") or "").strip()
+    if env_secret:
+        cfg["StripeSecretKey"] = env_secret
+
+    env_pub = (os.getenv("STRIPE_PUBLISHABLE_KEY") or "").strip()
+    if env_pub:
+        cfg["StripePublishableKey"] = env_pub
+
+    # Only accept a genuine webhook signing secret. A publishable or secret key
+    # pasted into this variable would make every webhook fail signature
+    # verification, which looks like Stripe being broken rather than a typo.
+    env_webhook = (os.getenv("STRIPE_WEBHOOK_SECRET") or "").strip()
+    if env_webhook.startswith("whsec_"):
+        cfg["StripeWebhookSecret"] = env_webhook
+
+    return cfg
