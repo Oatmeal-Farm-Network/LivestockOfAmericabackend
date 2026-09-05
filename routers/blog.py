@@ -3,6 +3,7 @@ from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from database import get_db
+from auth import get_current_user
 from pydantic import BaseModel
 from typing import Optional
 import re
@@ -11,6 +12,26 @@ from datetime import datetime
 from routers.translation import translate_fields, translate_list
 
 router = APIRouter(prefix="/api/blog", tags=["blog"])
+
+
+def require_business(business_id: int,
+                     current_user=Depends(get_current_user),
+                     db: Session = Depends(get_db)):
+    """Caller must hold the business whose blog they are touching.
+
+    Every management route already takes business_id as a query parameter, so
+    FastAPI resolves it here and the route bodies stay untouched. Public reads
+    (posts, global categories, an author's page) are deliberately not guarded.
+    """
+    row = db.execute(
+        text("SELECT 1 AS ok FROM BusinessAccess "
+             "WHERE BusinessID = :bid AND PeopleID = :pid AND Active = 1"),
+        {"bid": business_id, "pid": current_user.PeopleID}
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=403,
+                            detail="You do not have access to this business.")
+    return current_user
 
 
 
@@ -275,7 +296,7 @@ def list_custom_categories(business_id: int, db: Session = Depends(get_db)):
             for r in rows]
 
 
-@router.post("/categories/custom")
+@router.post("/categories/custom", dependencies=[Depends(require_business)])
 def create_custom_category(business_id: int, body: CategoryIn, db: Session = Depends(get_db)):
     """Add a custom category for a business."""
     _ensure_schema(db)
@@ -299,7 +320,7 @@ def create_custom_category(business_id: int, body: CategoryIn, db: Session = Dep
     return {"id": cat_id, "name": name}
 
 
-@router.put("/categories/custom/{cat_id}")
+@router.put("/categories/custom/{cat_id}", dependencies=[Depends(require_business)])
 def update_custom_category(cat_id: int, business_id: int, body: CategoryIn,
                             db: Session = Depends(get_db)):
     """Rename / reorder a custom category."""
@@ -316,7 +337,7 @@ def update_custom_category(cat_id: int, business_id: int, body: CategoryIn,
     return {"id": cat_id, "name": body.name.strip()}
 
 
-@router.delete("/categories/custom/{cat_id}")
+@router.delete("/categories/custom/{cat_id}", dependencies=[Depends(require_business)])
 def delete_custom_category(cat_id: int, business_id: int, db: Session = Depends(get_db)):
     """Delete a custom category (must belong to this business)."""
     _ensure_schema(db)
@@ -483,7 +504,7 @@ def get_post(blog_id: int, lang: str = "en", db: Session = Depends(get_db)):
 
 # ── Management endpoints ─────────────────────────────────────────
 
-@router.get("/manage")
+@router.get("/manage", dependencies=[Depends(require_business)])
 def manage_list(business_id: int, db: Session = Depends(get_db)):
     """List all posts (published + drafts) for a business."""
     _ensure_schema(db)
@@ -506,7 +527,7 @@ def manage_list(business_id: int, db: Session = Depends(get_db)):
     ]
 
 
-@router.post("/manage")
+@router.post("/manage", dependencies=[Depends(require_business)])
 def create_post(business_id: int, body: PostIn, db: Session = Depends(get_db)):
     """Create a new blog post."""
     _ensure_schema(db)
@@ -544,7 +565,7 @@ def create_post(business_id: int, body: PostIn, db: Session = Depends(get_db)):
     return {"blog_id": blog_id, "slug": slug}
 
 
-@router.put("/manage/{blog_id}")
+@router.put("/manage/{blog_id}", dependencies=[Depends(require_business)])
 def update_post(blog_id: int, business_id: int, body: PostIn, db: Session = Depends(get_db)):
     """Update a blog post."""
     _ensure_schema(db)
@@ -582,7 +603,7 @@ def update_post(blog_id: int, business_id: int, body: PostIn, db: Session = Depe
     return {"blog_id": blog_id, "slug": slug}
 
 
-@router.delete("/manage/{blog_id}")
+@router.delete("/manage/{blog_id}", dependencies=[Depends(require_business)])
 def delete_post(blog_id: int, business_id: int, db: Session = Depends(get_db)):
     """Delete a blog post and its photos."""
     _ensure_schema(db)
@@ -598,7 +619,7 @@ def delete_post(blog_id: int, business_id: int, db: Session = Depends(get_db)):
 
 # ── Photo management ─────────────────────────────────────────────
 
-@router.get("/manage/{blog_id}/photos")
+@router.get("/manage/{blog_id}/photos", dependencies=[Depends(require_business)])
 def list_photos(blog_id: int, business_id: int, db: Session = Depends(get_db)):
     """List photos for a post (verifies business ownership)."""
     _ensure_schema(db)
@@ -616,7 +637,7 @@ def list_photos(blog_id: int, business_id: int, db: Session = Depends(get_db)):
             for r in rows]
 
 
-@router.post("/manage/{blog_id}/photos")
+@router.post("/manage/{blog_id}/photos", dependencies=[Depends(require_business)])
 def add_photo(blog_id: int, business_id: int, body: PhotoIn,
               db: Session = Depends(get_db)):
     """Add a photo to a post."""
@@ -637,7 +658,7 @@ def add_photo(blog_id: int, business_id: int, body: PhotoIn,
     return {"photo_id": photo_id}
 
 
-@router.delete("/manage/{blog_id}/photos/{photo_id}")
+@router.delete("/manage/{blog_id}/photos/{photo_id}", dependencies=[Depends(require_business)])
 def delete_photo(blog_id: int, photo_id: int, business_id: int,
                  db: Session = Depends(get_db)):
     """Delete a photo."""
@@ -702,7 +723,7 @@ def get_author(author_id: int, db: Session = Depends(get_db)):
     }
 
 
-@router.post("/authors")
+@router.post("/authors", dependencies=[Depends(require_business)])
 def create_author(business_id: int, body: AuthorIn, db: Session = Depends(get_db)):
     """Create a new author profile."""
     _ensure_schema(db)
@@ -718,7 +739,7 @@ def create_author(business_id: int, body: AuthorIn, db: Session = Depends(get_db
     return {"author_id": author_id, "slug": slug}
 
 
-@router.put("/authors/{author_id}")
+@router.put("/authors/{author_id}", dependencies=[Depends(require_business)])
 def update_author(author_id: int, business_id: int, body: AuthorIn,
                   db: Session = Depends(get_db)):
     """Update an author profile."""
@@ -737,7 +758,7 @@ def update_author(author_id: int, business_id: int, body: AuthorIn,
     return {"author_id": author_id, "slug": slug}
 
 
-@router.delete("/authors/{author_id}")
+@router.delete("/authors/{author_id}", dependencies=[Depends(require_business)])
 def delete_author(author_id: int, business_id: int, db: Session = Depends(get_db)):
     """Delete an author profile."""
     _ensure_schema(db)
@@ -755,7 +776,7 @@ def delete_author(author_id: int, business_id: int, db: Session = Depends(get_db
 
 GCS_BUCKET = "oatmeal-farm-network-images"
 
-@router.post("/upload-image")
+@router.post("/upload-image", dependencies=[Depends(get_current_user)])
 async def upload_blog_image(file: UploadFile = File(...)):
     """Upload an image file to GCS and return its public URL."""
     if not file.content_type or not file.content_type.startswith("image/"):
