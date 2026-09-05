@@ -838,3 +838,58 @@ async def delete_animal(animal_id: int,
     db.execute(text("DELETE FROM Animals WHERE AnimalID = :aid"), {"aid": animal_id})
     db.commit()
     return {"deleted": animal_id}
+
+
+@router.post("/{animal_id}/transfer")
+async def transfer_animal(animal_id: int, request: Request,
+                          db: Session = Depends(get_db),
+                          current_user=Depends(get_current_user)):
+    """Move an animal to another business the caller also has access to.
+
+    Both ends are checked against BusinessAccess, the same way delete_animal
+    verifies ownership, so an animal can only be moved between businesses the
+    caller actually holds. Handing an animal to a third party is a different
+    feature — it needs the receiving side to accept — and is not this endpoint.
+    """
+    body = await request.json()
+    to_business_id = body.get("ToBusinessID")
+    try:
+        to_business_id = int(to_business_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="ToBusinessID is required.")
+
+    # The caller must hold the animal's current business.
+    row = db.execute(
+        text("SELECT a.BusinessID FROM Animals a "
+             "JOIN BusinessAccess ba ON ba.BusinessID = a.BusinessID "
+             "WHERE a.AnimalID = :aid AND ba.PeopleID = :pid AND ba.Active = 1"),
+        {"aid": animal_id, "pid": current_user.PeopleID}
+    ).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Animal not found or access denied")
+
+    from_business_id = row.BusinessID
+    if from_business_id == to_business_id:
+        raise HTTPException(status_code=400, detail="That animal is already with this business.")
+
+    # ...and the business it is going to.
+    dest = db.execute(
+        text("SELECT b.BusinessID, b.BusinessName FROM Business b "
+             "JOIN BusinessAccess ba ON ba.BusinessID = b.BusinessID "
+             "WHERE b.BusinessID = :bid AND ba.PeopleID = :pid AND ba.Active = 1"),
+        {"bid": to_business_id, "pid": current_user.PeopleID}
+    ).fetchone()
+    if not dest:
+        raise HTTPException(status_code=403, detail="You do not have access to that business.")
+
+    db.execute(
+        text("UPDATE Animals SET BusinessID = :to WHERE AnimalID = :aid"),
+        {"to": to_business_id, "aid": animal_id}
+    )
+    db.commit()
+    return {
+        "AnimalID": animal_id,
+        "FromBusinessID": from_business_id,
+        "ToBusinessID": to_business_id,
+        "ToBusinessName": dest.BusinessName,
+    }
