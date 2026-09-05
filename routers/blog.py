@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from database import get_db
 from auth import get_current_user
+from business_access import require_business
 from pydantic import BaseModel
 from typing import Optional
 import re
@@ -12,28 +13,6 @@ from datetime import datetime
 from routers.translation import translate_fields, translate_list
 
 router = APIRouter(prefix="/api/blog", tags=["blog"])
-
-
-def require_business(business_id: int,
-                     current_user=Depends(get_current_user),
-                     db: Session = Depends(get_db)):
-    """Caller must hold the business whose blog they are touching.
-
-    Every management route already takes business_id as a query parameter, so
-    FastAPI resolves it here and the route bodies stay untouched. Public reads
-    (posts, global categories, an author's page) are deliberately not guarded.
-    """
-    row = db.execute(
-        text("SELECT 1 AS ok FROM BusinessAccess "
-             "WHERE BusinessID = :bid AND PeopleID = :pid AND Active = 1"),
-        {"bid": business_id, "pid": current_user.PeopleID}
-    ).fetchone()
-    if not row:
-        raise HTTPException(status_code=403,
-                            detail="You do not have access to this business.")
-    return current_user
-
-
 
 
 def _slugify(title: str) -> str:

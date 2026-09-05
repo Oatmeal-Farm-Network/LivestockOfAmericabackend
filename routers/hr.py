@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from database import get_db
+from business_access import require_business, require_business_body
 from typing import Optional
 from datetime import date, datetime
 from fastapi.responses import StreamingResponse
@@ -193,7 +194,7 @@ def _not_found(label="Record"):
 #  EMPLOYEES
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.get("/employees")
+@router.get("/employees", dependencies=[Depends(require_business)])
 def list_employees(
     business_id: int = Query(...),
     active_only: bool = Query(True),
@@ -218,7 +219,7 @@ def list_employees(
     return _rows(rows)
 
 
-@router.get("/employees/{employee_id}")
+@router.get("/employees/{employee_id}", dependencies=[Depends(require_business)])
 def get_employee(employee_id: int, business_id: int = Query(...), db: Session = Depends(get_db)):
     _ensure_tables(db)
     r = db.execute(text(
@@ -229,7 +230,7 @@ def get_employee(employee_id: int, business_id: int = Query(...), db: Session = 
     return _row(r)
 
 
-@router.post("/employees")
+@router.post("/employees", dependencies=[Depends(require_business_body)])
 def create_employee(body: dict, db: Session = Depends(get_db)):
     _ensure_tables(db)
     r = db.execute(text("""
@@ -273,7 +274,7 @@ def create_employee(body: dict, db: Session = Depends(get_db)):
     return {"employee_id": r.scalar()}
 
 
-@router.put("/employees/{employee_id}")
+@router.put("/employees/{employee_id}", dependencies=[Depends(require_business_body)])
 def update_employee(employee_id: int, body: dict, db: Session = Depends(get_db)):
     _ensure_tables(db)
     db.execute(text("""
@@ -317,7 +318,7 @@ def update_employee(employee_id: int, body: dict, db: Session = Depends(get_db))
     return {"ok": True}
 
 
-@router.delete("/employees/{employee_id}")
+@router.delete("/employees/{employee_id}", dependencies=[Depends(require_business)])
 def deactivate_employee(employee_id: int, business_id: int = Query(...), db: Session = Depends(get_db)):
     _ensure_tables(db)
     db.execute(text(
@@ -332,7 +333,7 @@ def deactivate_employee(employee_id: int, business_id: int = Query(...), db: Ses
 #  CERTIFICATIONS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.get("/employees/{employee_id}/certifications")
+@router.get("/employees/{employee_id}/certifications", dependencies=[Depends(require_business)])
 def list_certifications(employee_id: int, business_id: int = Query(...), db: Session = Depends(get_db)):
     _ensure_tables(db)
     rows = db.execute(text(
@@ -341,7 +342,7 @@ def list_certifications(employee_id: int, business_id: int = Query(...), db: Ses
     return _rows(rows)
 
 
-@router.post("/employees/{employee_id}/certifications")
+@router.post("/employees/{employee_id}/certifications", dependencies=[Depends(require_business_body)])
 def add_certification(employee_id: int, body: dict, db: Session = Depends(get_db)):
     _ensure_tables(db)
     r = db.execute(text("""
@@ -362,7 +363,7 @@ def add_certification(employee_id: int, body: dict, db: Session = Depends(get_db
     return {"cert_id": r.scalar()}
 
 
-@router.delete("/certifications/{cert_id}")
+@router.delete("/certifications/{cert_id}", dependencies=[Depends(require_business)])
 def delete_certification(cert_id: int, business_id: int = Query(...), db: Session = Depends(get_db)):
     _ensure_tables(db)
     db.execute(text("DELETE FROM HRCertification WHERE CertID=:cid AND BusinessID=:bid"),
@@ -375,7 +376,7 @@ def delete_certification(cert_id: int, business_id: int = Query(...), db: Sessio
 #  ATTENDANCE
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.get("/attendance")
+@router.get("/attendance", dependencies=[Depends(require_business)])
 def list_attendance(
     business_id: int = Query(...),
     employee_id: Optional[int] = Query(None),
@@ -405,7 +406,7 @@ def list_attendance(
     return _rows(rows)
 
 
-@router.post("/attendance")
+@router.post("/attendance", dependencies=[Depends(require_business_body)])
 def log_attendance(body: dict, db: Session = Depends(get_db)):
     _ensure_tables(db)
     # Auto-calculate hours if check-in/out provided
@@ -440,7 +441,7 @@ def log_attendance(body: dict, db: Session = Depends(get_db)):
     return {"attendance_id": r.scalar()}
 
 
-@router.put("/attendance/{attendance_id}")
+@router.put("/attendance/{attendance_id}", dependencies=[Depends(require_business_body)])
 def update_attendance(attendance_id: int, body: dict, db: Session = Depends(get_db)):
     _ensure_tables(db)
     hours = body.get("hours_worked")
@@ -474,7 +475,7 @@ def update_attendance(attendance_id: int, body: dict, db: Session = Depends(get_
     return {"ok": True}
 
 
-@router.delete("/attendance/{attendance_id}")
+@router.delete("/attendance/{attendance_id}", dependencies=[Depends(require_business)])
 def delete_attendance(attendance_id: int, business_id: int = Query(...), db: Session = Depends(get_db)):
     _ensure_tables(db)
     db.execute(text("DELETE FROM HRAttendance WHERE AttendanceID=:aid AND BusinessID=:bid"),
@@ -487,7 +488,7 @@ def delete_attendance(attendance_id: int, business_id: int = Query(...), db: Ses
 #  TASKS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.get("/tasks")
+@router.get("/tasks", dependencies=[Depends(require_business)])
 def list_tasks(
     business_id: int = Query(...),
     employee_id: Optional[int] = Query(None),
@@ -516,7 +517,7 @@ def list_tasks(
     return _rows(rows)
 
 
-@router.post("/tasks")
+@router.post("/tasks", dependencies=[Depends(require_business_body)])
 def create_task(body: dict, db: Session = Depends(get_db)):
     _ensure_tables(db)
     r = db.execute(text("""
@@ -545,7 +546,7 @@ def create_task(body: dict, db: Session = Depends(get_db)):
     return {"task_id": r.scalar()}
 
 
-@router.put("/tasks/{task_id}")
+@router.put("/tasks/{task_id}", dependencies=[Depends(require_business_body)])
 def update_task(task_id: int, body: dict, db: Session = Depends(get_db)):
     _ensure_tables(db)
     completed_at = None
@@ -577,7 +578,7 @@ def update_task(task_id: int, body: dict, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
-@router.delete("/tasks/{task_id}")
+@router.delete("/tasks/{task_id}", dependencies=[Depends(require_business)])
 def delete_task(task_id: int, business_id: int = Query(...), db: Session = Depends(get_db)):
     _ensure_tables(db)
     db.execute(text("DELETE FROM HRTask WHERE TaskID=:tid AND BusinessID=:bid"),
@@ -590,7 +591,7 @@ def delete_task(task_id: int, business_id: int = Query(...), db: Session = Depen
 #  LEAVE REQUESTS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.get("/leave")
+@router.get("/leave", dependencies=[Depends(require_business)])
 def list_leave(
     business_id: int = Query(...),
     employee_id: Optional[int] = Query(None),
@@ -616,7 +617,7 @@ def list_leave(
     return _rows(rows)
 
 
-@router.post("/leave")
+@router.post("/leave", dependencies=[Depends(require_business_body)])
 def request_leave(body: dict, db: Session = Depends(get_db)):
     _ensure_tables(db)
     r = db.execute(text("""
@@ -638,7 +639,7 @@ def request_leave(body: dict, db: Session = Depends(get_db)):
     return {"leave_id": r.scalar()}
 
 
-@router.put("/leave/{leave_id}/review")
+@router.put("/leave/{leave_id}/review", dependencies=[Depends(require_business_body)])
 def review_leave(leave_id: int, body: dict, db: Session = Depends(get_db)):
     _ensure_tables(db)
     db.execute(text("""
@@ -660,7 +661,7 @@ def review_leave(leave_id: int, body: dict, db: Session = Depends(get_db)):
 #  PAY PERIODS & PAY SLIPS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.get("/pay-periods")
+@router.get("/pay-periods", dependencies=[Depends(require_business)])
 def list_pay_periods(business_id: int = Query(...), db: Session = Depends(get_db)):
     _ensure_tables(db)
     rows = db.execute(text(
@@ -669,7 +670,7 @@ def list_pay_periods(business_id: int = Query(...), db: Session = Depends(get_db
     return _rows(rows)
 
 
-@router.post("/pay-periods")
+@router.post("/pay-periods", dependencies=[Depends(require_business_body)])
 def create_pay_period(body: dict, db: Session = Depends(get_db)):
     _ensure_tables(db)
     r = db.execute(text("""
@@ -682,7 +683,7 @@ def create_pay_period(body: dict, db: Session = Depends(get_db)):
     return {"pay_period_id": r.scalar()}
 
 
-@router.get("/pay-periods/{period_id}/slips")
+@router.get("/pay-periods/{period_id}/slips", dependencies=[Depends(require_business)])
 def list_pay_slips(period_id: int, business_id: int = Query(...), db: Session = Depends(get_db)):
     _ensure_tables(db)
     rows = db.execute(text("""
@@ -696,7 +697,7 @@ def list_pay_slips(period_id: int, business_id: int = Query(...), db: Session = 
     return _rows(rows)
 
 
-@router.post("/pay-periods/{period_id}/calculate")
+@router.post("/pay-periods/{period_id}/calculate", dependencies=[Depends(require_business)])
 def calculate_pay_slips(period_id: int, business_id: int = Query(...), db: Session = Depends(get_db)):
     """
     Auto-generate pay slips from attendance records for the period.
@@ -773,7 +774,7 @@ def calculate_pay_slips(period_id: int, business_id: int = Query(...), db: Sessi
     return {"period": _row(period), "slips": slips}
 
 
-@router.post("/pay-periods/{period_id}/confirm")
+@router.post("/pay-periods/{period_id}/confirm", dependencies=[Depends(require_business_body)])
 def confirm_pay_slips(period_id: int, body: dict, db: Session = Depends(get_db)):
     """Persist pay slips and close the pay period."""
     _ensure_tables(db)
@@ -924,7 +925,7 @@ def _post_payroll_journal_entry(db: Session, business_id: int, period_id: int, t
         print(f"[payroll-je] {_e}")
 
 
-@router.get("/payroll-summary")
+@router.get("/payroll-summary", dependencies=[Depends(require_business)])
 def payroll_summary(
     business_id: int = Query(...),
     period_start: str = Query(...),
@@ -1004,7 +1005,7 @@ def payroll_summary(
 
 # ── Summary / Dashboard ───────────────────────────────────────────────────────
 
-@router.get("/summary")
+@router.get("/summary", dependencies=[Depends(require_business)])
 def hr_summary(business_id: int = Query(...), db: Session = Depends(get_db)):
     _ensure_tables(db)
     try:
@@ -1028,7 +1029,7 @@ def hr_summary(business_id: int = Query(...), db: Session = Depends(get_db)):
 
 # ── Payroll CSV Export ────────────────────────────────────────────────────────
 
-@router.get("/payroll/export")
+@router.get("/payroll/export", dependencies=[Depends(require_business)])
 def export_payroll_csv(business_id: int = Query(...), pay_period_id: Optional[int] = None,
                        db: Session = Depends(get_db)):
     """Download payroll summary for a pay period (or all paid periods) as CSV."""
