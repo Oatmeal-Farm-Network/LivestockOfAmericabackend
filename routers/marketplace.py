@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text, bindparam
 from database import get_db, engine
 from auth import get_current_user
+from business_access import require_business
 from pydantic import BaseModel
 from typing import Optional, List
 from datetime import date
@@ -1111,7 +1112,7 @@ def list_orders(buyer_people_id: int, db: Session = Depends(get_db)):
 # SELLER ACTIONS  (frontend-compatible paths)
 # ─────────────────────────────────────────────
 
-@marketplace_router.get("/orders/seller/{business_id}")
+@marketplace_router.get("/orders/seller/{business_id}", dependencies=[Depends(require_business)])
 def get_seller_orders_v2(
     business_id: int,
     status: str = Query(None),
@@ -1183,7 +1184,7 @@ def seller_ship_v2(body: dict, db: Session = Depends(get_db)):
     return {"ok": True}
 
 
-@marketplace_router.get("/seller/analytics")
+@marketplace_router.get("/seller/analytics", dependencies=[Depends(require_business)])
 def seller_analytics(business_id: int, db: Session = Depends(get_db)):
     """Revenue, top buyers, repeat order rate for the seller dashboard."""
     # Overall KPIs
@@ -1264,7 +1265,7 @@ def seller_analytics(business_id: int, db: Session = Depends(get_db)):
     }
 
 
-@marketplace_router.get("/seller/orders")
+@marketplace_router.get("/seller/orders", dependencies=[Depends(require_business)])
 def get_seller_orders(business_id: int, db: Session = Depends(get_db)):
     items = db.execute(text("""
         SELECT oi.*, o.OrderNumber, o.BuyerName, o.BuyerEmail,
@@ -1384,7 +1385,7 @@ def ship_item(order_item_id: int, req: ShipItemRequest, db: Session = Depends(ge
 # SELLER LISTINGS  (read-only view of their inventory)
 # ─────────────────────────────────────────────
 
-@marketplace_router.get("/seller/listings")
+@marketplace_router.get("/seller/listings", dependencies=[Depends(require_business)])
 def get_seller_listings(business_id: int, db: Session = Depends(get_db)):
     """Returns unified produce + meat + processed food for a seller."""
     results = []
@@ -1894,7 +1895,7 @@ def list_product_categories(db: Session = Depends(get_db)):
     return [r[0] for r in rows]
 
 
-@marketplace_router.get("/products/seller")
+@marketplace_router.get("/products/seller", dependencies=[Depends(require_business)])
 def seller_products(business_id: int, db: Session = Depends(get_db)):
     rows = db.execute(text("""
         SELECT pr.*, b.BusinessName AS SellerName, NULL AS SellerCity, NULL AS SellerState
@@ -3290,7 +3291,7 @@ def list_standing_orders(
     return [dict(r._mapping) for r in rows]
 
 
-@marketplace_router.get("/standing-orders/activity")
+@marketplace_router.get("/standing-orders/activity", dependencies=[Depends(require_business)])
 def standing_order_activity(
     business_id: int,
     role: str = "farm",
