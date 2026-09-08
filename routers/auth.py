@@ -225,6 +225,63 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
 
 
 # -------------------------
+# Impersonation handoff from oatmeal-ai.com admin
+# -------------------------
+class ImpersonateRequest(BaseModel):
+    token: str
+
+
+@router.post("/impersonate")
+def impersonate(request: ImpersonateRequest, db: Session = Depends(get_db)):
+    """Exchange a one-time admin handoff token for a normal session.
+
+    The token is minted by the oatmeal-ai.com admin tools, which verify the
+    admin against their persistent token before issuing it. Both sites share
+    one database, so the row is the whole trust chain: we never take the
+    target's identity from the caller. Tokens are single-use and expire in
+    about two minutes.
+    """
+    try:
+        row = db.execute(text("""
+            SELECT TokenID, TargetPeopleID
+              FROM ImpersonationTokens
+             WHERE Token = :t AND UsedAt IS NULL AND ExpiresAt > GETDATE()
+        """), {"t": request.token}).fetchone()
+    except Exception:
+        # The table is created by the admin side when it mints the first token,
+        # so a missing table just means no link was ever issued.
+        db.rollback()
+        row = None
+    if not row:
+        raise HTTPException(status_code=401,
+                            detail="This sign-in link has expired or has already been used.")
+
+    # Burn it first: a replay must fail even if anything below raises.
+    db.execute(text("UPDATE ImpersonationTokens SET UsedAt = GETDATE() WHERE TokenID = :id"),
+               {"id": row.TokenID})
+    db.commit()
+
+    user = db.query(models.People).filter(
+        models.People.PeopleID == row.TargetPeopleID,
+        models.People.PeopleActive == 1
+    ).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="That account is no longer available.")
+
+    token = create_access_token(data={"sub": str(user.PeopleID)})
+    return {
+        "AccessToken": token,
+        "token_type": "bearer",
+        "PeopleID": user.PeopleID,
+        "PeopleFirstName": user.PeopleFirstName,
+        "PeopleLastName": user.PeopleLastName,
+        "AccessLevel": user.accesslevel or 0,
+        "LKMAccessLevel": getattr(user, 'LKMAccessLevel', 0) or 0,
+        "Impersonated": True,
+    }
+
+
+# -------------------------
 # Get current user
 # -------------------------
 @router.get("/me")
