@@ -18,15 +18,62 @@ router = APIRouter()
 _GCS_BUCKET = "oatmeal-farm-network-images"
 _GCS_PREFIX = f"https://storage.googleapis.com/{_GCS_BUCKET}/"
 
+# A listing carries up to six images. The table has Photo1..Photo8 columns, but
+# only the first six are offered; 7 and 8 are left alone rather than dropped, so
+# nothing is destroyed if a row ever used them.
+MAX_SERVICE_PHOTOS = 6
+
+_ALLOWED_IMAGE_TYPES = {
+    "image/webp": ".webp", "image/jpeg": ".jpg",
+    "image/png": ".png", "image/gif": ".gif",
+}
+_MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB
+
+# The first bytes of each format we accept, so a file is judged by its content
+# rather than by a name or a content-type header the caller controls.
+# Written as hex to keep the signatures free of backslash escapes.
+_MAGIC = (
+    (bytes.fromhex("ffd8ff"), "image/jpeg"),
+    (bytes.fromhex("89504e470d0a1a0a"), "image/png"),
+    (b"GIF87a", "image/gif"),
+    (b"GIF89a", "image/gif"),
+)
+
+
+def _sniff_image_type(data: bytes) -> str:
+    """The real image type of these bytes, or None if it is not one we accept."""
+    for magic, mime in _MAGIC:
+        if data.startswith(magic):
+            return mime
+    # WEBP is "RIFF" + 4 size bytes + "WEBP".
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    return None
+
+
+def _require_slot(slot: int) -> int:
+    if slot < 1 or slot > MAX_SERVICE_PHOTOS:
+        raise HTTPException(status_code=400,
+                            detail=f"slot must be 1-{MAX_SERVICE_PHOTOS}")
+    return slot
+
 
 def _upload_service_photo(file_bytes: bytes, original_filename: str) -> str:
+    if not file_bytes:
+        raise HTTPException(status_code=400, detail="The file is empty.")
+    if len(file_bytes) > _MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=413, detail="Images must be 10 MB or smaller.")
+    content_type = _sniff_image_type(file_bytes)
+    if not content_type:
+        raise HTTPException(
+            status_code=400,
+            detail="Only JPEG, PNG, GIF and WEBP images can be uploaded.")
+
     from google.cloud import storage as _gcs
-    ext = os.path.splitext(original_filename)[1].lower() or ".webp"
-    fname = f"{uuid.uuid4().hex}{ext}"
-    ct_map = {".webp": "image/webp", ".jpg": "image/jpeg",
-              ".jpeg": "image/jpeg", ".png": "image/png"}
+    # The extension comes from the sniffed type, not the caller's filename.
+    fname = f"{uuid.uuid4().hex}{_ALLOWED_IMAGE_TYPES[content_type]}"
     blob = _gcs.Client().bucket(_GCS_BUCKET).blob(f"Services/{fname}")
-    blob.upload_from_string(file_bytes, content_type=ct_map.get(ext, "image/webp"))
+    blob.upload_from_string(file_bytes, content_type=content_type)
     return f"{_GCS_PREFIX}Services/{quote(fname, safe='')}"
 
 
@@ -312,7 +359,11 @@ def service_detail(services_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Service not found")
     d = dict(row._mapping)
     # Collect photos
-    d["photos"] = [d.get(f"Photo{i}") for i in range(1, 9) if d.get(f"Photo{i}")]
+    d["photos"] = [d.get(f"Photo{i}") for i in range(1, MAX_SERVICE_PHOTOS + 1)
+                   if d.get(f"Photo{i}")]
+    d["photo_captions"] = [d.get(f"PhotoCaption{i}") or ""
+                           for i in range(1, MAX_SERVICE_PHOTOS + 1)
+                           if d.get(f"Photo{i}")]
     return d
 
 # -------------------------
@@ -383,19 +434,24 @@ def suggest_category(data: dict, db: Session = Depends(get_db),
 def get_photos(services_id: int, db: Session = Depends(get_db),
                current_user=Depends(get_current_user)):
     _require_service_access(db, current_user, services_id)
-    row = db.execute(text("SELECT Photo1,Photo2,Photo3,Photo4,Photo5,Photo6,Photo7,Photo8,PhotoCaption1,PhotoCaption2,PhotoCaption3,PhotoCaption4,PhotoCaption5,PhotoCaption6,PhotoCaption7,PhotoCaption8 FROM Services WHERE ServicesID = :id"), {"id": services_id}).fetchone()
+    cols = ", ".join(
+        [f"Photo{i}" for i in range(1, MAX_SERVICE_PHOTOS + 1)]
+        + [f"PhotoCaption{i}" for i in range(1, MAX_SERVICE_PHOTOS + 1)])
+    row = db.execute(text(f"SELECT {cols} FROM Services WHERE ServicesID = :id"),
+                     {"id": services_id}).fetchone()
     if not row:
         return []
     d = dict(row._mapping)
-    return [{"slot": i+1, "url": d.get(f"Photo{i+1}") or "", "caption": d.get(f"PhotoCaption{i+1}") or ""} for i in range(8)]
+    return [{"slot": i, "url": d.get(f"Photo{i}") or "",
+             "caption": d.get(f"PhotoCaption{i}") or ""}
+            for i in range(1, MAX_SERVICE_PHOTOS + 1)]
 
 # Upload photo into a slot
 @router.post("/api/services/{services_id}/photos/upload")
 async def upload_service_photo(services_id: int, file: UploadFile = File(...),
                                slot: int = 1, db: Session = Depends(get_db),
                                current_user=Depends(get_current_user)):
-    if slot < 1 or slot > 8:
-        raise HTTPException(status_code=400, detail="slot must be 1-8")
+    _require_slot(slot)
     _require_service_access(db, current_user, services_id)
     url = _upload_service_photo(await file.read(), file.filename or "photo.webp")
     db.execute(text(f"UPDATE Services SET Photo{slot} = :url WHERE ServicesID = :id"),
@@ -407,8 +463,7 @@ async def upload_service_photo(services_id: int, file: UploadFile = File(...),
 @router.post("/api/services/{services_id}/photos/{slot}/remove")
 def remove_photo(services_id: int, slot: int, db: Session = Depends(get_db),
                  current_user=Depends(get_current_user)):
-    if slot < 1 or slot > 8:
-        raise HTTPException(status_code=400, detail="slot must be 1-8")
+    _require_slot(slot)
     _require_service_access(db, current_user, services_id)
     db.execute(text(f"UPDATE Services SET Photo{slot} = '', PhotoCaption{slot} = '' WHERE ServicesID = :id"), {"id": services_id})
     db.commit()
@@ -418,9 +473,9 @@ def remove_photo(services_id: int, slot: int, db: Session = Depends(get_db),
 @router.post("/api/services/{services_id}/photos/{slot}/caption")
 def save_caption(services_id: int, slot: int, data: dict, db: Session = Depends(get_db),
                  current_user=Depends(get_current_user)):
-    if slot < 1 or slot > 8:
-        raise HTTPException(status_code=400, detail="slot must be 1-8")
+    _require_slot(slot)
     _require_service_access(db, current_user, services_id)
-    db.execute(text(f"UPDATE Services SET PhotoCaption{slot} = :cap WHERE ServicesID = :id"), {"cap": data.get("caption"), "id": services_id})
+    db.execute(text(f"UPDATE Services SET PhotoCaption{slot} = :cap WHERE ServicesID = :id"),
+               {"cap": (data.get("caption") or "")[:256], "id": services_id})
     db.commit()
     return {"message": "Saved"}
