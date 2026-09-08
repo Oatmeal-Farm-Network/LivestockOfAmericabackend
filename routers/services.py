@@ -1,3 +1,4 @@
+import html
 import os
 import uuid
 from urllib.parse import quote
@@ -7,6 +8,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from database import get_db
 from auth import get_current_user
+from business_access import assert_business_access
 import httpx
 
 router = APIRouter()
@@ -31,39 +33,34 @@ def _upload_service_photo(file_bytes: bytes, original_filename: str) -> str:
 # -------------------------
 # Access control
 #
-# The three write endpoints below took no user at all: any caller could add a
-# service to someone else's business, or edit and delete any service by id.
-# The frontend was already sending a bearer token on all three, so requiring it
-# here needs no client change.
+# The write endpoints below took no user at all: any caller could add a service
+# to someone else's business, or edit and delete any service by id. The frontend
+# was already sending a bearer token on all of them, so requiring it here needs
+# no client change. assert_business_access is the shared guard from
+# business_access.py — the same check the animal endpoints make.
 # -------------------------
-def _require_business_access(db: Session, user, business_id):
-    """Raise unless the caller has an active BusinessAccess row for this business."""
-    if not business_id:
-        raise HTTPException(status_code=400, detail="BusinessID is required")
-    allowed = db.execute(text("""
-        SELECT 1 FROM BusinessAccess
-        WHERE BusinessID = :bid AND PeopleID = :pid AND Active = 1
-    """), {"bid": business_id, "pid": user.PeopleID}).fetchone()
-    if not allowed:
-        raise HTTPException(status_code=403, detail="You do not have access to this business")
-
-
-def _service_business_id(db: Session, services_id: int) -> int:
-    """The business a service belongs to, so writes can be scoped to its owners."""
+def _require_service_access(db: Session, current_user, services_id: int) -> int:
+    """Caller must hold the business that owns this service."""
     row = db.execute(
         text("SELECT BusinessID FROM Services WHERE ServicesID = :sid"),
         {"sid": services_id},
     ).fetchone()
     if not row:
         raise HTTPException(status_code=404, detail="Service not found")
-    return row.BusinessID
+    return assert_business_access(db, row.BusinessID, current_user.PeopleID)
 
-SENDGRID_API_KEY = "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"
+
+# Was a literal API key in this file. Every other module in this service reads
+# the same variable, so it follows that convention now.
+SENDGRID_API_KEY = os.getenv("SENDGRID_API_KEY", "")
 SENDGRID_URL = "https://api.sendgrid.com/v3/mail/send"
-FROM_EMAIL = "john@oatmeal-ai.com"
-TO_EMAIL = "livestockoftheworld@gmail.com"
+FROM_EMAIL = os.getenv("FROM_EMAIL", "john@oatmeal-ai.com")
+TO_EMAIL = os.getenv("SERVICES_NOTIFY_EMAIL", "livestockoftheworld@gmail.com")
 
 def send_email(subject: str, body: str):
+    if not SENDGRID_API_KEY:
+        print("SendGrid not configured; skipping notification: %s" % subject)
+        return
     payload = {
         "personalizations": [{"to": [{"email": TO_EMAIL}]}],
         "from": {"email": FROM_EMAIL, "name": "Oatmeal Farm Network"},
@@ -75,7 +72,9 @@ def send_email(subject: str, body: str):
         "Content-Type": "application/json",
     }
     try:
-        httpx.post(SENDGRID_URL, json=payload, headers=headers, timeout=10)
+        resp = httpx.post(SENDGRID_URL, json=payload, headers=headers, timeout=10)
+        if resp.status_code >= 400:
+            print(f"SendGrid rejected the message: {resp.status_code} {resp.text[:200]}")
     except Exception as e:
         print(f"SendGrid error: {e}")
 
@@ -83,7 +82,9 @@ def send_email(subject: str, body: str):
 # List services for a business
 # -------------------------
 @router.get("/api/services")
-def list_services(BusinessID: int, db: Session = Depends(get_db)):
+def list_services(BusinessID: int, db: Session = Depends(get_db),
+                  current_user=Depends(get_current_user)):
+    assert_business_access(db, BusinessID, current_user.PeopleID)
     rows = db.execute(text("""
         SELECT ServicesID, ServiceTitle, ServiceAvailable, ServicePrice, ServiceContactForPrice
         FROM Services WHERE BusinessID = :bid ORDER BY ServiceTitle
@@ -121,7 +122,7 @@ def get_subcategories(category_id: int, db: Session = Depends(get_db)):
 @router.post("/api/services/add")
 def add_service(data: dict, db: Session = Depends(get_db),
                 current_user=Depends(get_current_user)):
-    _require_business_access(db, current_user, data.get("BusinessID"))
+    assert_business_access(db, data.get("BusinessID"), current_user.PeopleID)
     db.execute(text("""
         INSERT INTO Services (
             BusinessID, ServiceCategoryID, ServiceSubCategoryID, ServiceTitle,
@@ -157,7 +158,7 @@ def add_service(data: dict, db: Session = Depends(get_db),
 @router.get("/api/services/{services_id:int}")
 def get_service(services_id: int, db: Session = Depends(get_db),
                 current_user=Depends(get_current_user)):
-    _require_business_access(db, current_user, _service_business_id(db, services_id))
+    _require_service_access(db, current_user, services_id)
     row = db.execute(text("""
         SELECT s.*, sc.ServicesCategory
         FROM Services s
@@ -174,7 +175,7 @@ def get_service(services_id: int, db: Session = Depends(get_db),
 @router.post("/api/services/{services_id:int}/update")
 def update_service(services_id: int, data: dict, db: Session = Depends(get_db),
                    current_user=Depends(get_current_user)):
-    _require_business_access(db, current_user, _service_business_id(db, services_id))
+    _require_service_access(db, current_user, services_id)
     db.execute(text("""
         UPDATE Services SET
             ServiceCategoryID    = :cat,
@@ -210,7 +211,7 @@ def update_service(services_id: int, data: dict, db: Session = Depends(get_db),
 @router.delete("/api/services/{services_id:int}")
 def delete_service(services_id: int, db: Session = Depends(get_db),
                    current_user=Depends(get_current_user)):
-    _require_business_access(db, current_user, _service_business_id(db, services_id))
+    _require_service_access(db, current_user, services_id)
     db.execute(text("DELETE FROM Services WHERE ServicesID = :sid"), {"sid": services_id})
     db.commit()
     return {"ok": True}
@@ -309,16 +310,31 @@ def services_by_business(business_id: int, db: Session = Depends(get_db)):
 # Suggest a new category (sends email via SendGrid)
 # -------------------------
 @router.post("/api/services/suggest-category")
-def suggest_category(data: dict):
-    business_name = data.get("BusinessName", "Unknown")
-    categories = data.get("Categories", "")
-    subcategories = data.get("SubCategories", "")
+def suggest_category(data: dict, db: Session = Depends(get_db),
+                     current_user=Depends(get_current_user)):
+    # This took no user and no db: anyone could POST arbitrary HTML and have it
+    # emailed out from our domain. The page always sends a token and a
+    # BusinessID, so the sender is verified here and the business name is read
+    # from the database rather than trusted from the body, which also stops the
+    # notification from being addressed by a name the caller made up.
+    business_id = assert_business_access(db, data.get("BusinessID"), current_user.PeopleID)
+    row = db.execute(text("SELECT BusinessName FROM Business WHERE BusinessID = :bid"),
+                     {"bid": business_id}).fetchone()
+    business_name = (row.BusinessName if row else None) or f"Business #{business_id}"
 
+    categories = str(data.get("Categories", ""))[:2000]
+    subcategories = str(data.get("SubCategories", ""))[:2000]
+    if not categories.strip():
+        raise HTTPException(status_code=400, detail="Categories is required")
+
+    # Everything below is caller-supplied, so it is escaped before being put in
+    # an HTML mail body.
     body = f"""
     <h2>New Service Category Suggestion</h2>
-    <p><b>Business:</b> {business_name}</p>
-    <p><b>Suggested Categories:</b><br>{categories}</p>
-    <p><b>Suggested Sub-Categories:</b><br>{subcategories or 'None provided'}</p>
+    <p><b>Business:</b> {html.escape(business_name)} (#{business_id})</p>
+    <p><b>Submitted by:</b> {html.escape(current_user.PeopleEmail or '')} (PeopleID {current_user.PeopleID})</p>
+    <p><b>Suggested Categories:</b><br>{html.escape(categories)}</p>
+    <p><b>Suggested Sub-Categories:</b><br>{html.escape(subcategories) or 'None provided'}</p>
     """
 
     send_email(
@@ -339,7 +355,9 @@ def suggest_category(data: dict):
 # -------------------------
 # Get photos
 @router.get("/api/services/{services_id}/photos")
-def get_photos(services_id: int, db: Session = Depends(get_db)):
+def get_photos(services_id: int, db: Session = Depends(get_db),
+               current_user=Depends(get_current_user)):
+    _require_service_access(db, current_user, services_id)
     row = db.execute(text("SELECT Photo1,Photo2,Photo3,Photo4,Photo5,Photo6,Photo7,Photo8,PhotoCaption1,PhotoCaption2,PhotoCaption3,PhotoCaption4,PhotoCaption5,PhotoCaption6,PhotoCaption7,PhotoCaption8 FROM Services WHERE ServicesID = :id"), {"id": services_id}).fetchone()
     if not row:
         return []
@@ -353,7 +371,7 @@ async def upload_service_photo(services_id: int, file: UploadFile = File(...),
                                current_user=Depends(get_current_user)):
     if slot < 1 or slot > 8:
         raise HTTPException(status_code=400, detail="slot must be 1-8")
-    _require_business_access(db, current_user, _service_business_id(db, services_id))
+    _require_service_access(db, current_user, services_id)
     url = _upload_service_photo(await file.read(), file.filename or "photo.webp")
     db.execute(text(f"UPDATE Services SET Photo{slot} = :url WHERE ServicesID = :id"),
                {"url": url, "id": services_id})
@@ -366,7 +384,7 @@ def remove_photo(services_id: int, slot: int, db: Session = Depends(get_db),
                  current_user=Depends(get_current_user)):
     if slot < 1 or slot > 8:
         raise HTTPException(status_code=400, detail="slot must be 1-8")
-    _require_business_access(db, current_user, _service_business_id(db, services_id))
+    _require_service_access(db, current_user, services_id)
     db.execute(text(f"UPDATE Services SET Photo{slot} = '', PhotoCaption{slot} = '' WHERE ServicesID = :id"), {"id": services_id})
     db.commit()
     return {"message": "Removed"}
@@ -377,7 +395,7 @@ def save_caption(services_id: int, slot: int, data: dict, db: Session = Depends(
                  current_user=Depends(get_current_user)):
     if slot < 1 or slot > 8:
         raise HTTPException(status_code=400, detail="slot must be 1-8")
-    _require_business_access(db, current_user, _service_business_id(db, services_id))
+    _require_service_access(db, current_user, services_id)
     db.execute(text(f"UPDATE Services SET PhotoCaption{slot} = :cap WHERE ServicesID = :id"), {"cap": data.get("caption"), "id": services_id})
     db.commit()
     return {"message": "Saved"}
