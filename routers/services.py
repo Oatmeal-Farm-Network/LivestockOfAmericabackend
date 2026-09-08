@@ -86,8 +86,13 @@ def list_services(BusinessID: int, db: Session = Depends(get_db),
                   current_user=Depends(get_current_user)):
     assert_business_access(db, BusinessID, current_user.PeopleID)
     rows = db.execute(text("""
-        SELECT ServicesID, ServiceTitle, ServiceAvailable, ServicePrice, ServiceContactForPrice
-        FROM Services WHERE BusinessID = :bid ORDER BY ServiceTitle
+        SELECT s.ServicesID, s.ServiceTitle, s.ServiceAvailable, s.ServicePrice,
+               s.ServiceContactForPrice, sc.ServicesCategory, ssc.ServiceSubCategoryName
+        FROM Services s
+        LEFT JOIN servicescategories sc ON s.ServiceCategoryID = sc.ServiceCategoryID
+        LEFT JOIN servicessubcategories ssc
+               ON ssc.ServicesSubcategoryID = s.ServiceSubCategoryID
+        WHERE s.BusinessID = :bid ORDER BY s.ServiceTitle
     """), {"bid": BusinessID}).fetchall()
     return [dict(r._mapping) for r in rows]
 
@@ -108,10 +113,16 @@ def get_categories(db: Session = Depends(get_db)):
 # -------------------------
 @router.get("/api/services/categories/{category_id}/subcategories")
 def get_subcategories(category_id: int, db: Session = Depends(get_db)):
+    # The id column is ServicesSubcategoryID; selecting ServiceSubCategoryID
+    # raised "Invalid column name" on every call, so this 500'd and the
+    # subcategory dropdown — which hides itself when the list is empty — never
+    # appeared. Aliased to the name the client already expects.
+    # ServiceCategoryID is varchar here but int in servicescategories, so it is
+    # converted explicitly rather than left to an implicit cast.
     rows = db.execute(text("""
-        SELECT ServiceSubCategoryID, ServiceSubCategoryName
+        SELECT ServicesSubcategoryID AS ServiceSubCategoryID, ServiceSubCategoryName
         FROM servicessubcategories
-        WHERE ServiceCategoryID = :cid
+        WHERE TRY_CONVERT(int, ServiceCategoryID) = :cid
         ORDER BY ServiceSubCategoryName
     """), {"cid": category_id}).fetchall()
     return [dict(r._mapping) for r in rows]
@@ -160,9 +171,11 @@ def get_service(services_id: int, db: Session = Depends(get_db),
                 current_user=Depends(get_current_user)):
     _require_service_access(db, current_user, services_id)
     row = db.execute(text("""
-        SELECT s.*, sc.ServicesCategory
+        SELECT s.*, sc.ServicesCategory, ssc.ServiceSubCategoryName
         FROM Services s
         LEFT JOIN servicescategories sc ON s.ServiceCategoryID = sc.ServiceCategoryID
+        LEFT JOIN servicessubcategories ssc
+               ON ssc.ServicesSubcategoryID = s.ServiceSubCategoryID
         WHERE s.ServicesID = :sid
     """), {"sid": services_id}).fetchone()
     if not row:
@@ -226,7 +239,8 @@ def all_subcategories(db: Session = Depends(get_db)):
                ssc.ServiceSubCategoryName,
                ssc.ServiceCategoryID, sc.ServicesCategory
         FROM servicessubcategories ssc
-        LEFT JOIN servicescategories sc ON ssc.ServiceCategoryID = sc.ServiceCategoryID
+        LEFT JOIN servicescategories sc
+               ON TRY_CONVERT(int, ssc.ServiceCategoryID) = sc.ServiceCategoryID
         ORDER BY sc.ServicesCategory, ssc.ServiceSubCategoryName
     """)).fetchall()
     return [dict(r._mapping) for r in rows]
@@ -246,6 +260,11 @@ def browse_services(
     if category_id:
         where.append("s.ServiceCategoryID = :cid")
         params["cid"] = category_id
+    # subcategory_id was accepted and then never used, so the directory's
+    # subcategory dropdown filtered nothing.
+    if subcategory_id:
+        where.append("s.ServiceSubCategoryID = :subcid")
+        params["subcid"] = subcategory_id
     if q:
         where.append(
             "(s.ServiceTitle LIKE :q OR s.ServicesDescription LIKE :q OR b.BusinessName LIKE :q)"
@@ -257,10 +276,14 @@ def browse_services(
                s.ServicePrice, s.ServiceContactForPrice, s.ServiceAvailable,
                s.Photo1, s.BusinessID,
                b.BusinessName,
-               sc.ServicesCategory, sc.ServiceCategoryID
+               sc.ServicesCategory, sc.ServiceCategoryID,
+               ssc.ServicesSubcategoryID AS ServiceSubCategoryID,
+               ssc.ServiceSubCategoryName
         FROM Services s
         JOIN Business b ON s.BusinessID = b.BusinessID
         LEFT JOIN servicescategories sc ON s.ServiceCategoryID = sc.ServiceCategoryID
+        LEFT JOIN servicessubcategories ssc
+               ON ssc.ServicesSubcategoryID = s.ServiceSubCategoryID
         WHERE {' AND '.join(where)}
         ORDER BY sc.ServicesCategory, s.ServiceTitle
     """
@@ -274,11 +297,13 @@ def browse_services(
 def service_detail(services_id: int, db: Session = Depends(get_db)):
     row = db.execute(text("""
         SELECT s.*, b.BusinessName, b.BusinessID AS BizID,
-               sc.ServicesCategory,
+               sc.ServicesCategory, ssc.ServiceSubCategoryName,
                a.AddressCity, a.AddressState, a.AddressZip, a.AddressCountry
         FROM Services s
         JOIN Business b ON s.BusinessID = b.BusinessID
         LEFT JOIN servicescategories sc ON s.ServiceCategoryID = sc.ServiceCategoryID
+        LEFT JOIN servicessubcategories ssc
+               ON ssc.ServicesSubcategoryID = s.ServiceSubCategoryID
         LEFT JOIN Address a ON b.AddressID = a.AddressID
         WHERE s.ServicesID = :sid
     """), {"sid": services_id}).fetchone()
