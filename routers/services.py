@@ -86,6 +86,21 @@ def _upload_service_photo(file_bytes: bytes, original_filename: str) -> str:
 # no client change. assert_business_access is the shared guard from
 # business_access.py — the same check the animal endpoints make.
 # -------------------------
+def _as_listed_flag(value, default=1) -> int:
+    """ServiceAvailable is a smallint the public directory filters on (= 1).
+
+    The form used to offer it as a free-text 'Availability' box, so a blank
+    field arrived as '' and became 0 -- a service that was added and then never
+    appeared anywhere. Anything non-numeric would not even convert. Coerced to a
+    strict 0/1 here so the column can only ever hold a usable value.
+    """
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return 1 if value else 0
+    return 1 if str(value).strip().lower() in ("1", "true", "yes", "y") else 0
+
+
 def _require_service_access(db: Session, current_user, services_id: int) -> int:
     """Caller must hold the business that owns this service."""
     row = db.execute(
@@ -198,7 +213,7 @@ def add_service(data: dict, db: Session = Depends(get_db),
         "title": data.get("ServiceTitle"),
         "price": data.get("ServicePrice") or None,
         "cfp": data.get("ServiceContactForPrice", 0),
-        "avail": data.get("ServiceAvailable"),
+        "avail": _as_listed_flag(data.get("ServiceAvailable"), default=1),
         "desc": data.get("ServicesDescription"),
         "phone": data.get("ServicePhone"),
         "web": data.get("Servicewebsite"),
@@ -256,7 +271,7 @@ def update_service(services_id: int, data: dict, db: Session = Depends(get_db),
         "title":  data.get("ServiceTitle"),
         "price":  data.get("ServicePrice") or None,
         "cfp":    data.get("ServiceContactForPrice", 0),
-        "avail":  data.get("ServiceAvailable"),
+        "avail":  _as_listed_flag(data.get("ServiceAvailable"), default=1),
         "desc":   data.get("ServicesDescription"),
         "phone":  data.get("ServicePhone"),
         "web":    data.get("Servicewebsite"),
