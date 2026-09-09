@@ -391,9 +391,11 @@ def services_by_business(business_id: int, db: Session = Depends(get_db)):
     rows = db.execute(text("""
         SELECT s.ServicesID, s.ServiceTitle, s.ServicesDescription,
                s.ServicePrice, s.ServiceContactForPrice, s.ServiceAvailable,
-               s.Photo1, sc.ServicesCategory
+               s.Photo1, sc.ServicesCategory, ssc.ServiceSubCategoryName
         FROM Services s
         LEFT JOIN servicescategories sc ON s.ServiceCategoryID = sc.ServiceCategoryID
+        LEFT JOIN servicessubcategories ssc
+               ON ssc.ServicesSubcategoryID = s.ServiceSubCategoryID
         WHERE s.BusinessID = :bid AND s.ServiceAvailable = 1
         ORDER BY s.ServiceTitle
     """), {"bid": business_id}).fetchall()
