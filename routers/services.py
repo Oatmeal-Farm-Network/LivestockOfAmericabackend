@@ -1,8 +1,5 @@
 import html
 import os
-import uuid
-from urllib.parse import quote
-
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -10,46 +7,15 @@ from database import get_db
 from auth import get_current_user
 from business_access import assert_business_access
 from routers.directory_regions import IN_DIRECTORY_REGION_SQL
+from image_uploads import upload_image
 import httpx
 
 router = APIRouter()
 
 
-# Same bucket the animal photos use; services get their own folder in it.
-_GCS_BUCKET = "oatmeal-farm-network-images"
-_GCS_PREFIX = f"https://storage.googleapis.com/{_GCS_BUCKET}/"
-
-# A listing carries up to six images. The table has Photo1..Photo8 columns, but
-# only the first six are offered; 7 and 8 are left alone rather than dropped, so
-# nothing is destroyed if a row ever used them.
+# Photo storage and validation now live in image_uploads.py, shared with the
+# business gallery so the magic-byte check is not duplicated.
 MAX_SERVICE_PHOTOS = 6
-
-_ALLOWED_IMAGE_TYPES = {
-    "image/webp": ".webp", "image/jpeg": ".jpg",
-    "image/png": ".png", "image/gif": ".gif",
-}
-_MAX_IMAGE_BYTES = 10 * 1024 * 1024  # 10 MB
-
-# The first bytes of each format we accept, so a file is judged by its content
-# rather than by a name or a content-type header the caller controls.
-# Written as hex to keep the signatures free of backslash escapes.
-_MAGIC = (
-    (bytes.fromhex("ffd8ff"), "image/jpeg"),
-    (bytes.fromhex("89504e470d0a1a0a"), "image/png"),
-    (b"GIF87a", "image/gif"),
-    (b"GIF89a", "image/gif"),
-)
-
-
-def _sniff_image_type(data: bytes) -> str:
-    """The real image type of these bytes, or None if it is not one we accept."""
-    for magic, mime in _MAGIC:
-        if data.startswith(magic):
-            return mime
-    # WEBP is "RIFF" + 4 size bytes + "WEBP".
-    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
-        return "image/webp"
-    return None
 
 
 def _require_slot(slot: int) -> int:
@@ -57,49 +23,6 @@ def _require_slot(slot: int) -> int:
         raise HTTPException(status_code=400,
                             detail=f"slot must be 1-{MAX_SERVICE_PHOTOS}")
     return slot
-
-
-def _upload_service_photo(file_bytes: bytes, original_filename: str) -> str:
-    if not file_bytes:
-        raise HTTPException(status_code=400, detail="The file is empty.")
-    if len(file_bytes) > _MAX_IMAGE_BYTES:
-        raise HTTPException(status_code=413, detail="Images must be 10 MB or smaller.")
-    content_type = _sniff_image_type(file_bytes)
-    if not content_type:
-        raise HTTPException(
-            status_code=400,
-            detail="Only JPEG, PNG, GIF and WEBP images can be uploaded.")
-
-    from google.cloud import storage as _gcs
-    # The extension comes from the sniffed type, not the caller's filename.
-    fname = f"{uuid.uuid4().hex}{_ALLOWED_IMAGE_TYPES[content_type]}"
-    blob = _gcs.Client().bucket(_GCS_BUCKET).blob(f"Services/{fname}")
-    blob.upload_from_string(file_bytes, content_type=content_type)
-    return f"{_GCS_PREFIX}Services/{quote(fname, safe='')}"
-
-
-# -------------------------
-# Access control
-#
-# The write endpoints below took no user at all: any caller could add a service
-# to someone else's business, or edit and delete any service by id. The frontend
-# was already sending a bearer token on all of them, so requiring it here needs
-# no client change. assert_business_access is the shared guard from
-# business_access.py — the same check the animal endpoints make.
-# -------------------------
-def _as_listed_flag(value, default=1) -> int:
-    """ServiceAvailable is a smallint the public directory filters on (= 1).
-
-    The form used to offer it as a free-text 'Availability' box, so a blank
-    field arrived as '' and became 0 -- a service that was added and then never
-    appeared anywhere. Anything non-numeric would not even convert. Coerced to a
-    strict 0/1 here so the column can only ever hold a usable value.
-    """
-    if value is None or value == "":
-        return default
-    if isinstance(value, bool):
-        return 1 if value else 0
-    return 1 if str(value).strip().lower() in ("1", "true", "yes", "y") else 0
 
 
 def _require_service_access(db: Session, current_user, services_id: int) -> int:
@@ -472,7 +395,7 @@ async def upload_service_photo(services_id: int, file: UploadFile = File(...),
                                current_user=Depends(get_current_user)):
     _require_slot(slot)
     _require_service_access(db, current_user, services_id)
-    url = _upload_service_photo(await file.read(), file.filename or "photo.webp")
+    url = upload_image(await file.read(), "Services")
     db.execute(text(f"UPDATE Services SET Photo{slot} = :url WHERE ServicesID = :id"),
                {"url": url, "id": services_id})
     db.commit()

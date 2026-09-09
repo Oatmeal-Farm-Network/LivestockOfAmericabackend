@@ -23,6 +23,7 @@ from routers import livestock
 from routers import produce
 from routers import processed_food
 from routers import services
+from routers import business_photos
 from routers import ranches
 from routers import meat
 from routers import forgot_password
@@ -540,6 +541,7 @@ app.include_router(herd_health.router)
 app.include_router(produce.router)
 app.include_router(processed_food.router)
 app.include_router(services.router)
+app.include_router(business_photos.router)
 app.include_router(ranches.router)
 app.include_router(meat.router)
 
