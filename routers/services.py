@@ -7,7 +7,7 @@ from database import get_db
 from auth import get_current_user
 from business_access import assert_business_access
 from routers.directory_regions import IN_DIRECTORY_REGION_SQL
-from image_uploads import upload_image
+from image_uploads import upload_image, delete_image
 import httpx
 
 router = APIRouter()
@@ -422,8 +422,11 @@ def remove_photo(services_id: int, slot: int, db: Session = Depends(get_db),
                  current_user=Depends(get_current_user)):
     _require_slot(slot)
     _require_service_access(db, current_user, services_id)
+    url = db.execute(text(f"SELECT Photo{slot} FROM Services WHERE ServicesID = :id"),
+                     {"id": services_id}).scalar()
     db.execute(text(f"UPDATE Services SET Photo{slot} = '', PhotoCaption{slot} = '' WHERE ServicesID = :id"), {"id": services_id})
     db.commit()
+    delete_image(url)
     return {"message": "Removed"}
 
 # Save caption

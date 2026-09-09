@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from database import get_db
 from auth import get_current_user
 from business_access import assert_business_access
-from image_uploads import upload_image
+from image_uploads import upload_image, delete_image
 
 router = APIRouter(prefix="/api/businesses", tags=["business-photos"])
 
@@ -140,11 +140,17 @@ def delete_page(business_id: int, page_id: int, db: Session = Depends(get_db),
     _owned_page(db, business_id, page_id)
     # The photo rows go with the page. The stored objects are left in the
     # bucket, the same as removing a single photo or an animal photo.
-    removed = db.execute(text("SELECT COUNT(*) FROM BusinessPhotos WHERE BusinessPhotoPageID = :pid"),
-                         {"pid": page_id}).scalar() or 0
+    urls = [r.PhotoUrl for r in db.execute(text(
+        "SELECT PhotoUrl FROM BusinessPhotos WHERE BusinessPhotoPageID = :pid"),
+        {"pid": page_id}).fetchall()]
+    removed = len(urls)
     db.execute(text("DELETE FROM BusinessPhotos WHERE BusinessPhotoPageID = :pid"), {"pid": page_id})
     db.execute(text("DELETE FROM BusinessPhotoPages WHERE BusinessPhotoPageID = :pid"), {"pid": page_id})
     db.commit()
+    # After the commit: the rows are gone either way, and a storage hiccup must
+    # not roll back a delete the caller has already been told about.
+    for u in urls:
+        delete_image(u)
     return {"ok": True, "PhotosRemoved": removed}
 
 
@@ -235,8 +241,11 @@ def delete_photo(business_id: int, photo_id: int, db: Session = Depends(get_db),
                  current_user=Depends(get_current_user)):
     assert_business_access(db, business_id, current_user.PeopleID)
     _owned_photo(db, business_id, photo_id)
+    url = db.execute(text("SELECT PhotoUrl FROM BusinessPhotos WHERE BusinessPhotoID = :pid"),
+                     {"pid": photo_id}).scalar()
     db.execute(text("DELETE FROM BusinessPhotos WHERE BusinessPhotoID = :pid"), {"pid": photo_id})
     db.commit()
+    delete_image(url)
     return {"ok": True}
 
 

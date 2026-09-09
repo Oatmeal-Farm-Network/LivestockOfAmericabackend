@@ -8,7 +8,7 @@ SVG carrying a script would otherwise be stored and served from our domain.
 """
 import os
 import uuid
-from urllib.parse import quote
+from urllib.parse import quote, unquote
 
 from fastapi import HTTPException
 
@@ -65,3 +65,26 @@ def upload_image(file_bytes: bytes, folder: str) -> str:
     blob = _gcs.Client().bucket(GCS_BUCKET).blob(f"{folder}/{fname}")
     blob.upload_from_string(file_bytes, content_type=content_type)
     return f"{GCS_PREFIX}{folder}/{quote(fname, safe='')}"
+
+
+def delete_image(url: str) -> bool:
+    """Remove a stored image. Best effort: never raises.
+
+    Deleting the row and leaving the object behind is how the animal photos have
+    accumulated. Failure here must not fail the request that removed the row --
+    an object that outlives its row is untidy, a 500 on delete is not.
+
+    Only touches our own bucket, and only the exact object named by the URL.
+    """
+    if not url or not url.startswith(GCS_PREFIX):
+        return False
+    name = unquote(url[len(GCS_PREFIX):])
+    if not name or name.startswith('/') or '..' in name:
+        return False
+    try:
+        from google.cloud import storage as _gcs
+        _gcs.Client().bucket(GCS_BUCKET).blob(name).delete()
+        return True
+    except Exception as e:  # already gone, or transient — the row is what matters
+        print("could not delete %s: %s" % (name, type(e).__name__))
+        return False
