@@ -26,7 +26,6 @@ from routers import services
 from routers import business_photos
 from routers import ranches
 from routers import meat
-from routers import forgot_password
 from routers import weather
 from routers import notes
 from routers import crop_rotation
@@ -559,7 +558,6 @@ app.include_router(supplier_directory.router)
 app.include_router(grants.router)
 app.include_router(education.router)
 app.include_router(csa_advanced.router)
-app.include_router(forgot_password.router)
 app.include_router(weather.router)
 app.include_router(notes.router)
 app.include_router(crop_rotation.router)
