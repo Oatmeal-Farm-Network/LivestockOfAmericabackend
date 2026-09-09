@@ -280,6 +280,14 @@ class SiteCreate(BaseModel):
     nav_bg_image_url: Optional[str] = None
     # Footer
     footer_bg_image_url: Optional[str] = None
+    header_content_bg_color: Optional[str] = None
+    header_content_bg_image_url: Optional[str] = None
+    body_bg_color: Optional[str] = None
+    body_bg_image_url: Optional[str] = None
+    body_content_bg_color: Optional[str] = None
+    body_content_bg_image_url: Optional[str] = None
+    footer_content_bg_color: Optional[str] = None
+    footer_content_bg_image_url: Optional[str] = None
     footer_html: Optional[str] = None
     footer_height: Optional[int] = 200
     footer_bottom_radius: Optional[int] = 0
@@ -552,6 +560,14 @@ def _ser_site(s: models.BusinessWebsite) -> dict:
         "nav_bg_image_url":   s.NavBgImageURL or '',
         # Footer
         "footer_bg_image_url":    s.FooterBgImageURL or '',
+        "header_content_bg_color": s.HeaderContentBgColor or '',
+        "header_content_bg_image_url": s.HeaderContentBgImageURL or '',
+        "body_bg_color": s.BodyBgColor or '',
+        "body_bg_image_url": s.BodyBgImageURL or '',
+        "body_content_bg_color": s.BodyContentBgColor or '',
+        "body_content_bg_image_url": s.BodyContentBgImageURL or '',
+        "footer_content_bg_color": s.FooterContentBgColor or '',
+        "footer_content_bg_image_url": s.FooterContentBgImageURL or '',
         "footer_html":            s.FooterHTML or '',
         "footer_height":          s.FooterHeight or 200,
         "footer_bottom_radius":   s.FooterBottomRadius or 0,
@@ -782,6 +798,14 @@ def update_site(website_id: int, body: SiteUpdate, db: Session = Depends(get_db)
     if body.nav_bg_image_url is not None: site.NavBgImageURL = body.nav_bg_image_url
     # Footer
     if body.footer_bg_image_url is not None: site.FooterBgImageURL = body.footer_bg_image_url
+    if body.header_content_bg_color is not None: site.HeaderContentBgColor = body.header_content_bg_color
+    if body.header_content_bg_image_url is not None: site.HeaderContentBgImageURL = body.header_content_bg_image_url
+    if body.body_bg_color is not None: site.BodyBgColor = body.body_bg_color
+    if body.body_bg_image_url is not None: site.BodyBgImageURL = body.body_bg_image_url
+    if body.body_content_bg_color is not None: site.BodyContentBgColor = body.body_content_bg_color
+    if body.body_content_bg_image_url is not None: site.BodyContentBgImageURL = body.body_content_bg_image_url
+    if body.footer_content_bg_color is not None: site.FooterContentBgColor = body.footer_content_bg_color
+    if body.footer_content_bg_image_url is not None: site.FooterContentBgImageURL = body.footer_content_bg_image_url
     if body.footer_html is not None: site.FooterHTML = body.footer_html
     if body.footer_height is not None: site.FooterHeight = body.footer_height
     if body.footer_bottom_radius is not None: site.FooterBottomRadius = body.footer_bottom_radius
