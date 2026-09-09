@@ -385,8 +385,20 @@ def get_businesses(
             LEFT JOIN Address a ON b.AddressID = a.AddressID
             LEFT JOIN businesstypelookup bt ON b.BusinessTypeID = bt.BusinessTypeID
             LEFT JOIN country c ON a.country_id = c.country_id
-            LEFT JOIN state_province sp ON a.AddressState = CAST(sp.StateIndex AS CHAR)
-                                        OR a.AddressState = sp.name
+            -- OUTER APPLY, not a join: state_province holds the same state
+            -- name under more than one country (Montana and Maryland each
+            -- appear twice), so the name-based join matched two rows and
+            -- listed 20 businesses in the directory twice. TOP 1 preferring
+            -- the row whose country matches the address keeps the right one.
+            OUTER APPLY (
+                SELECT TOP 1 sp2.name
+                FROM state_province sp2
+                WHERE a.AddressState = CAST(sp2.StateIndex AS CHAR)
+                   OR a.AddressState = sp2.name
+                ORDER BY CASE WHEN TRY_CAST(sp2.country_id AS INT)
+                                 = TRY_CAST(a.country_id AS INT) THEN 0 ELSE 1 END,
+                         sp2.StateIndex
+            ) sp
             LEFT JOIN Websites w ON b.WebsitesID = w.WebsitesID
             WHERE {where_clause}
             ORDER BY b.BusinessName
