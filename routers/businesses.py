@@ -82,6 +82,13 @@ def build_logo_url(logo):
 
 @router.get("/countries")
 def get_countries(business_type_id: str = None, db: Session = Depends(get_db)):
+    """The countries this site covers: USA, Canada, Greenland.
+
+    Serves both the directory filter and the country picker on account
+    creation, so the unfiltered branch returns all three even when one has no
+    businesses yet -- deriving the list from existing rows would have made it
+    impossible to register the first business in Greenland.
+    """
     try:
         if business_type_id:
             rows = db.execute(text("""
@@ -96,13 +103,10 @@ def get_countries(business_type_id: str = None, db: Session = Depends(get_db)):
             """), {"btid": int(business_type_id)}).fetchall()
         else:
             rows = db.execute(text("""
-                SELECT DISTINCT c.name
-                FROM country c
-                JOIN Address a ON a.country_id = c.country_id
-                JOIN Business b ON b.AddressID = a.AddressID
-                WHERE c.name IS NOT NULL AND c.name <> ''
-                  AND c.country_id IN (1228, 1039, 1086)
-                ORDER BY c.name
+                SELECT name FROM country
+                WHERE name IS NOT NULL AND name <> ''
+                  AND country_id IN (1228, 1039, 1086)
+                ORDER BY name
             """)).fetchall()
         return [r.name for r in rows]
     except Exception as e:
