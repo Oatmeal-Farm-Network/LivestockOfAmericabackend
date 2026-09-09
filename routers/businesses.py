@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from database import get_db, SessionLocal
 from routers.subscription_limits import DIRECTORY_VISIBLE_SQL
+from routers.directory_regions import IN_DIRECTORY_REGION_SQL, DIRECTORY_COUNTRY_IDS
 import models
 import datetime
 
@@ -90,13 +91,18 @@ def get_countries(business_type_id: str = None, db: Session = Depends(get_db)):
                 JOIN Business b ON b.AddressID = a.AddressID
                 WHERE b.BusinessTypeID = :btid
                   AND c.name IS NOT NULL AND c.name <> ''
+                  AND c.country_id IN (1228, 1039, 1086)
                 ORDER BY c.name
             """), {"btid": int(business_type_id)}).fetchall()
         else:
             rows = db.execute(text("""
-                SELECT name FROM country
-                WHERE name IS NOT NULL AND name <> ''
-                ORDER BY name
+                SELECT DISTINCT c.name
+                FROM country c
+                JOIN Address a ON a.country_id = c.country_id
+                JOIN Business b ON b.AddressID = a.AddressID
+                WHERE c.name IS NOT NULL AND c.name <> ''
+                  AND c.country_id IN (1228, 1039, 1086)
+                ORDER BY c.name
             """)).fetchall()
         return [r.name for r in rows]
     except Exception as e:
@@ -279,7 +285,7 @@ def search_businesses(q: str = "", limit: int = 1000, db: Session = Depends(get_
     params = {"pattern": f"%{escaped}%", "limit": max(1, min(int(limit or 1000), 2000))}
     named = ("b.BusinessName IS NOT NULL AND LTRIM(RTRIM(b.BusinessName)) <> ''")
     where = (f"b.BusinessName LIKE :pattern ESCAPE '\\' AND {named} "
-             f"AND {DIRECTORY_VISIBLE_SQL}")
+             f"AND {DIRECTORY_VISIBLE_SQL} AND {IN_DIRECTORY_REGION_SQL}")
 
     try:
         total = db.execute(text(
@@ -336,7 +342,7 @@ def get_businesses(
         from sqlalchemy import text
 
         params = {}
-        conditions = ["1=1", DIRECTORY_VISIBLE_SQL]
+        conditions = ["1=1", DIRECTORY_VISIBLE_SQL, IN_DIRECTORY_REGION_SQL]
 
         if BusinessTypeID:
             conditions.append("b.BusinessTypeID = :business_type_id")

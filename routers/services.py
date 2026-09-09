@@ -9,6 +9,7 @@ from sqlalchemy import text
 from database import get_db
 from auth import get_current_user
 from business_access import assert_business_access
+from routers.directory_regions import IN_DIRECTORY_REGION_SQL
 import httpx
 
 router = APIRouter()
@@ -317,7 +318,8 @@ def browse_services(
     q: str = None,
     db: Session = Depends(get_db),
 ):
-    where = ["s.ServiceAvailable = 1"]
+    # The directory only lists organizations in the service area.
+    where = ["s.ServiceAvailable = 1", IN_DIRECTORY_REGION_SQL]
     params = {}
     if category_id:
         where.append("s.ServiceCategoryID = :cid")
