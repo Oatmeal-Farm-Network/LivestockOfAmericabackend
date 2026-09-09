@@ -41,7 +41,7 @@ def get_business_team(business_id: int, db: Session = Depends(get_db)):
     """
     rows = db.execute(text("""
         SELECT p.PeopleID, p.PeopleFirstName, p.PeopleLastName, p.PeopleEmail,
-               p.PeoplePhone, ba.AccessLevel
+               p.PeoplePhone, ba.AccessLevelID, ba.Role
         FROM BusinessAccess ba
         JOIN People p ON p.PeopleID = ba.PeopleID
         WHERE ba.BusinessID = :bid AND ba.Active = 1
@@ -54,7 +54,13 @@ def get_business_team(business_id: int, db: Session = Depends(get_db)):
             "LastName":    r["PeopleLastName"],
             "Email":       r["PeopleEmail"],
             "Phone":       r["PeoplePhone"],
-            "AccessLevel": r["AccessLevel"],
+            "AccessLevelID": r["AccessLevelID"],
+            "Role": r["Role"],
+            # BusinessAccess has AccessLevelID and Role; there is no AccessLevel
+            # column, so this query raised "Invalid column name" and the
+            # endpoint returned 500 on every call. Kept as an alias for any
+            # caller that read the old key.
+            "AccessLevel": r["Role"],
         }
         for r in rows
     ]
