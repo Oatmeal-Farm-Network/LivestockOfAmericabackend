@@ -20,7 +20,7 @@ from image_uploads import upload_image
 router = APIRouter(prefix="/api/businesses", tags=["business-photos"])
 
 MAX_PHOTO_PAGES = 10
-MAX_PHOTOS_PER_PAGE = 12
+MAX_PHOTOS_PER_PAGE = 24
 
 
 # ── pages ────────────────────────────────────────────────────────────────────
