@@ -18,6 +18,21 @@ router = APIRouter()
 MAX_SERVICE_PHOTOS = 6
 
 
+def _as_listed_flag(value, default=1) -> int:
+    """ServiceAvailable is a smallint the public directory filters on (= 1).
+
+    The form used to offer it as a free-text 'Availability' box, so a blank
+    field arrived as '' and became 0 -- a service that was added and then never
+    appeared anywhere. Anything non-numeric would not even convert. Coerced to a
+    strict 0/1 here so the column can only ever hold a usable value.
+    """
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return 1 if value else 0
+    return 1 if str(value).strip().lower() in ("1", "true", "yes", "y") else 0
+
+
 def _require_slot(slot: int) -> int:
     if slot < 1 or slot > MAX_SERVICE_PHOTOS:
         raise HTTPException(status_code=400,
