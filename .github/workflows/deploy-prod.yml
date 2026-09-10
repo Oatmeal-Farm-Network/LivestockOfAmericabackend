@@ -1,18 +1,11 @@
 name: Deploy LOA Backend Production
 
-# main → livestock-backend-prod (Cloud Run, us-central1)
-#
-# No GitHub secrets required. Auth is keyless via Workload Identity Federation:
-# the values below are resource identifiers, not credentials. The security
-# boundary is the IAM binding on the deployer service account, which only
-# trusts tokens carrying attribute.repository == this repo.
-#
-# Any value can still be overridden by setting a repository variable of the
-# same name without editing this file.
+# Ownership moved: livestock-backend-prod is now deployed from
+# Oatmeal-Farm-Network/oatmealfarmnetworkbackend (livestock/ + deploy-livestock-prod.yml).
+# This workflow is retained only as a manual emergency escape hatch; it does not
+# run on push so the two repos cannot overwrite each other.
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 env:
@@ -27,19 +20,24 @@ env:
   DEPLOYER_SA: ${{ vars.PROD_GCP_SERVICE_ACCOUNT || 'github-deployer@animated-flare-421518.iam.gserviceaccount.com' }}
 
 jobs:
+  notice:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ownership moved
+        run: |
+          echo "::notice::livestock-backend-prod is owned by oatmealfarmnetworkbackend/livestock."
+          echo "Do not use this workflow unless that path is broken and you are intentionally rolling back."
+
   deploy:
+    needs: notice
+    if: ${{ false }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Derive commit SHA tag
-        shell: bash
-        run: echo "COMMIT_SHA=${GITHUB_SHA::12}" >> "$GITHUB_ENV"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -55,8 +53,9 @@ jobs:
 
       - name: Build Docker image
         run: |
+          echo "COMMIT_SHA=${GITHUB_SHA::12}" >> "$GITHUB_ENV"
           docker build \
-            -t "${REGION}-docker.pkg.dev/${PROJECT_ID}/${GAR_REPOSITORY}/${IMAGE_NAME}:${COMMIT_SHA}" \
+            -t "${REGION}-docker.pkg.dev/${PROJECT_ID}/${GAR_REPOSITORY}/${IMAGE_NAME}:${GITHUB_SHA::12}" \
             -t "${REGION}-docker.pkg.dev/${PROJECT_ID}/${GAR_REPOSITORY}/${IMAGE_NAME}:latest" \
             .
 
@@ -65,9 +64,6 @@ jobs:
           docker push "${REGION}-docker.pkg.dev/${PROJECT_ID}/${GAR_REPOSITORY}/${IMAGE_NAME}:${COMMIT_SHA}"
           docker push "${REGION}-docker.pkg.dev/${PROJECT_ID}/${GAR_REPOSITORY}/${IMAGE_NAME}:latest"
 
-      # Env vars (DB creds, SECRET_KEY, SCHEDULER_SECRET) are intentionally not
-      # set here — they already live on the service and are preserved across
-      # revisions. Change them in the Cloud Run console, not in this file.
       - name: Deploy to Cloud Run
         run: |
           gcloud run deploy "${SERVICE_NAME}" \
