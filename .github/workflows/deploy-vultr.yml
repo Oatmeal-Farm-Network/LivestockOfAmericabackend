@@ -1,0 +1,65 @@
+name: Deploy Livestock of America backend to Vultr Kubernetes
+
+# Builds the image, pushes it to Vultr Container Registry and rolls it out to the
+# livestock namespace on the oatmeal-farm-network VKE cluster.
+# Skips cleanly until the Vultr secrets are configured.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-vultr-livestock-backend
+  cancel-in-progress: false
+
+jobs:
+  check-vultr:
+    runs-on: ubuntu-latest
+    outputs:
+      configured: ${{ steps.check.outputs.configured }}
+    steps:
+      - id: check
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.VULTR_KUBECONFIG }}" ] && [ -n "${{ secrets.VCR_USERNAME }}" ] && [ -n "${{ vars.VCR_REGISTRY }}" ]; then
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Vultr deploy not configured (VULTR_KUBECONFIG / VCR_USERNAME / VCR_PASSWORD secrets, VCR_REGISTRY variable). Skipping."
+          fi
+
+  deploy:
+    needs: check-vultr
+    if: needs.check-vultr.outputs.configured == 'true'
+    runs-on: ubuntu-latest
+    env:
+      IMAGE: ${{ vars.VCR_REGISTRY }}/livestock-backend:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pass secrets via env: the registry username contains "$" (robot$...),
+      # which bash would expand if the secret were inlined into the script.
+      - name: Log in to Vultr Container Registry
+        env:
+          VCR_USERNAME: ${{ secrets.VCR_USERNAME }}
+          VCR_PASSWORD: ${{ secrets.VCR_PASSWORD }}
+        run: printf '%s' "$VCR_PASSWORD" | docker login "${{ vars.VCR_REGISTRY }}" -u "$VCR_USERNAME" --password-stdin
+
+      - name: Build and push image
+        run: |
+          docker build \
+            -t "$IMAGE" .
+          docker push "$IMAGE"
+
+      - name: Configure kubectl
+        env:
+          VULTR_KUBECONFIG: ${{ secrets.VULTR_KUBECONFIG }}
+        run: |
+          mkdir -p ~/.kube
+          printf '%s' "$VULTR_KUBECONFIG" | base64 -d > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Roll out
+        run: |
+          sed "s|image: IMAGE|image: $IMAGE|" k8s/livestock-backend.yaml | kubectl apply -f -
+          kubectl -n livestock rollout status deployment/livestock-backend --timeout=10m
