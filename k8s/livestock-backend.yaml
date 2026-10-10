@@ -21,6 +21,8 @@ spec:
           env:
             - {name: PORT, value: "8080"}
             - {name: GOOGLE_APPLICATION_CREDENTIALS, value: /var/secrets/gcp/key.json}
+            # Cloud Run detection picked this URL before; on Vultr use the in-cluster service.
+            - {name: CROP_MONITOR_URL, value: "http://ofn-cropmonitor.ofn.svc.cluster.local"}
           envFrom:
             - secretRef: {name: livestock-backend-env}
           volumeMounts:
