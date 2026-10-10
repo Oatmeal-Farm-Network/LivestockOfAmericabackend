@@ -1,0 +1,76 @@
+# Livestock of America backend on the oatmeal-farm-network VKE cluster (replaces Cloud Run
+# service livestock-backend-prod). IMAGE is replaced by .github/workflows/deploy-vultr.yml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: livestock-backend
+  namespace: livestock
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: livestock-backend}
+  template:
+    metadata:
+      labels: {app: livestock-backend}
+    spec:
+      imagePullSecrets: [{name: vcr-pull}]
+      containers:
+        - name: livestock-backend
+          image: IMAGE
+          ports: [{containerPort: 8080}]
+          env:
+            - {name: PORT, value: "8080"}
+            - {name: GOOGLE_APPLICATION_CREDENTIALS, value: /var/secrets/gcp/key.json}
+            # Cloud Run detection picked this URL before; on Vultr use the in-cluster service.
+            - {name: CROP_MONITOR_URL, value: "http://ofn-cropmonitor.ofn.svc.cluster.local"}
+          envFrom:
+            - secretRef: {name: livestock-backend-env}
+          volumeMounts:
+            - {name: gcp-sa, mountPath: /var/secrets/gcp, readOnly: true}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+          startupProbe:
+            httpGet: {path: /health, port: 8080}
+            periodSeconds: 5
+            failureThreshold: 60
+          readinessProbe:
+            httpGet: {path: /health, port: 8080}
+            periodSeconds: 10
+      volumes:
+        - name: gcp-sa
+          secret: {secretName: gcp-sa, optional: true}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: livestock-backend
+  namespace: livestock
+spec:
+  selector: {app: livestock-backend}
+  ports: [{port: 80, targetPort: 8080}]
+---
+# DNS for these hosts must point at the ingress-nginx LoadBalancer (45.63.76.196)
+# before cert-manager can issue the certificate.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: livestock-backend
+  namespace: livestock
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts: [api.livestockofamerica.com]
+      secretName: livestock-backend-tls
+  rules:
+    - host: api.livestockofamerica.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service: {name: livestock-backend, port: {number: 80}}
