@@ -3,9 +3,9 @@ name: Deploy Livestock of America backend to Vultr Kubernetes
 # Builds the image, pushes it to Vultr Container Registry and rolls it out to the
 # livestock namespace on the oatmeal-farm-network VKE cluster.
 # Skips cleanly until the Vultr secrets are configured.
+# Manual only: api.livestockofamerica.com moved to ofn-livestock-api in
+# oatmealfarmnetworkbackend, and this deployment no longer has an Ingress.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 concurrency:
