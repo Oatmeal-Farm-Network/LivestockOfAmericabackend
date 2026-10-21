@@ -49,28 +49,5 @@ metadata:
 spec:
   selector: {app: livestock-backend}
   ports: [{port: 80, targetPort: 8080}]
----
-# DNS for these hosts must point at the ingress-nginx LoadBalancer (45.63.76.196)
-# before cert-manager can issue the certificate.
-apiVersion: networking.k8s.io/v1
-kind: Ingress
-metadata:
-  name: livestock-backend
-  namespace: livestock
-  annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-    nginx.ingress.kubernetes.io/proxy-body-size: "50m"
-    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
-spec:
-  ingressClassName: nginx
-  tls:
-    - hosts: [api.livestockofamerica.com]
-      secretName: livestock-backend-tls
-  rules:
-    - host: api.livestockofamerica.com
-      http:
-        paths:
-          - path: /
-            pathType: Prefix
-            backend:
-              service: {name: livestock-backend, port: {number: 80}}
+# No Ingress: api.livestockofamerica.com is served by ofn-livestock-api from
+# oatmealfarmnetworkbackend (k8s/app/livestock-api.yaml).
